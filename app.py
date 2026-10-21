@@ -1,5 +1,5 @@
 import streamlit as st
-import google.generativeai as genai
+from groq import Groq
 from PIL import Image
 
 st.set_page_config(
@@ -17,41 +17,45 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title("⚡ الذكاء الموسوعي الخارق")
-st.caption("مرحباً بك يا أنس، منصتك الخاصة للتحليل والبحث الفائق.")
+st.title("⚡ الذكاء الموسوعي الخارق (Groq Engine)")
+st.caption("مرحباً بك يا أنس، السرعة القصوى والأداء الفائق.")
 
-MY_API_KEY = st.secrets.get("GEMINI_API_KEY", "")
-uploaded_file = st.file_uploader("ارفق صورة للتحليل البصري (اختياري):", type=["jpg", "jpeg", "png"])
+# جلب مفتاح Groq من الـ Secrets بأمان
+GROQ_API_KEY = st.secrets.get("GROQ_API_KEY", "")
+
 user_question = st.text_area("اطرح سؤالك أو معضلتك هنا:", placeholder="اكتب ما تبحث عنه...")
 
-if st.button("إرسال وتحليل 🚀"):
-    if not MY_API_KEY:
-        st.error("لم يتم العثور على المفتاح في إعدادات Secrets في Streamlit!")
+if st.button("إرسال وتحليل صاروخي 🚀"):
+    if not GROQ_API_KEY:
+        st.error("لم يتم العثور على مفتاح Groq في إعدادات Secrets في Streamlit!")
     else:
         try:
-            genai.configure(api_key=MY_API_KEY)
+            client = Groq(api_key=GROQ_API_KEY)
             
-            # استخدام اسم الموديل الصحيح والمعتمد رسمياً حالياً
-            model = genai.GenerativeModel('gemini-2.5-flash')
+            if not user_question:
+                st.warning("الرجاء كتابة سؤال للبدء.")
+                st.stop()
             
-            prompt_text = (
-                "أنت خبير موسوعي وعالم ذكاء اصطناعي فائق الذكاء، ملم بجميع العلوم والمعارف البشرية. "
-                "أجب عن السؤال التالي بعمق، ودقة علمية عالية، ومعلومات غنية دون إجابات سطحيّة:\n\n" + user_question
-            )
-            
-            with st.spinner("جاري التفكير وصياغة الإجابة... 🧠"):
-                if uploaded_file is not None:
-                    image = Image.open(uploaded_file)
-                    response = model.generate_content([prompt_text, image])
-                else:
-                    if not user_question:
-                        st.warning("الرجاء كتابة سؤال أو رفع صورة للبدء.")
-                        st.stop()
-                    else:
-                        response = model.generate_content(prompt_text)
-                        
+            with st.spinner("جاري المعالجة بسرعة البرق... ⚡"):
+                # استخدام نموذج Llama 3 القوي والسريع جداً على Groq
+                chat_completion = client.chat.completions.create(
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": "أنت خبير موسوعي وعالم ذكاء اصطناعي فائق الذكاء، ملم بجميع العلوم والمعارف. أجب بعمق ودقة علمية عالية."
+                        },
+                        {
+                            "role": "user",
+                            "content": user_question,
+                        }
+                    ],
+                    model="llama-3.3-70b-versatile",
+                )
+                
+                response_text = chat_completion.choices[0].message.content
+                
                 st.markdown("### 💡 الإجابة:")
-                st.markdown(response.text)
+                st.markdown(response_text)
                 
         except Exception as e:
             st.error(f"حدث خطأ: {e}")
