@@ -19,7 +19,6 @@ st.markdown("""
 st.title("⚡ الذكاء الموسوعي الخارق (Groq Engine)")
 st.caption("مرحباً بك يا أنس، السرعة القصوى والأداء الفائق.")
 
-# جلب مفتاح Groq من الـ Secrets
 GROQ_API_KEY = st.secrets.get("GROQ_API_KEY", "")
 
 user_question = st.text_area("اطرح سؤالك أو معضلتك هنا:", placeholder="اكتب ما تبحث عنه...")
@@ -36,7 +35,14 @@ if st.button("إرسال وتحليل صاروخي 🚀"):
                 st.stop()
             
             with st.spinner("جاري المعالجة بسرعة البرق... ⚡"):
-                # استخدام الموديل القياسي والمباشر المتاح في Groq
+                # اختيار الموديل تلقائياً لمنع أي أخطاء توقف مستقبلية
+                try:
+                    models = client.models.list()
+                    available_models = [m.id for m in models.data if "llama" in m.id]
+                    model_to_use = available_models[0] if available_models else "llama-3.3-70b-versatile"
+                except:
+                    model_to_use = "llama-3.3-70b-versatile"
+
                 chat_completion = client.chat.completions.create(
                     messages=[
                         {
@@ -48,7 +54,7 @@ if st.button("إرسال وتحليل صاروخي 🚀"):
                             "content": user_question,
                         }
                     ],
-                    model="llama3-8b-8192",
+                    model=model_to_use,
                 )
                 
                 response_text = chat_completion.choices[0].message.content
