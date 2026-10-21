@@ -18,7 +18,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.title("⚡ الذكاء الموسوعي الخارق (Groq Engine)")
-st.caption("مرحباً بك يا أنس، النظام الذكي الديناميكي بالكامل.")
+st.caption("مرحباً بك يا أنس، استنتاج أقوى نموذج متاح مع زر النسخ المباشر.")
 
 GROQ_API_KEY = st.secrets.get("GROQ_API_KEY", "")
 
@@ -36,17 +36,18 @@ if st.button("إرسال وتحليل صاروخي 🚀"):
                 st.warning("الرجاء كتابة سؤال أو رفع صورة للبدء.")
                 st.stop()
             
-            with st.spinner("جاري اختبار النماذج المتاحة في حسابك والمعالجة... ⚡"):
-                # جلب قائمة كل الموديلات الموجودة في المفتاح
+            with st.spinner("جاري استنتاج واختبار أقوى نموذج متاح في حسابك... ⚡"):
                 models_response = client.models.list()
                 all_model_ids = [m.id for m in models_response.data]
                 
                 response_text = None
+                used_model_name = ""
                 last_error = None
                 
                 if uploaded_file is not None:
-                    # فلترة نماذج الصور
-                    vision_candidates = [m for m in all_model_ids if any(k in m.lower() for k in ["vision", "llava", "11b", "90b"])]
+                    # فلترة وترتيب نماذج الصور (تفضيل الأقوى والأحدث)
+                    vision_candidates = [m for m in all_model_ids if any(k in m.lower() for k in ["vision", "llava", "90b", "11b"])]
+                    vision_candidates.sort(key=lambda x: ("90b" in x.lower(), "vision" in x.lower()), reverse=True)
                     if not vision_candidates:
                         vision_candidates = all_model_ids
                         
@@ -65,7 +66,6 @@ if st.button("إرسال وتحليل صاروخي 🚀"):
                         }
                     ]
                     
-                    # جرب نماذج الصور واحد تلو الآخر حتى ينجح واحد
                     for m_id in vision_candidates:
                         try:
                             chat_completion = client.chat.completions.create(
@@ -73,13 +73,23 @@ if st.button("إرسال وتحليل صاروخي 🚀"):
                                 model=m_id,
                             )
                             response_text = chat_completion.choices[0].message.content
+                            used_model_name = m_id
                             break
                         except Exception as err:
                             last_error = err
                             continue
                 else:
-                    # فلترة نماذج النصوص وتجنب نماذج الحماية
-                    text_candidates = [m for m in all_model_ids if "guard" not in m.lower() and "whisper" not in m.lower() and "embed" not in m.lower()]
+                    # فلترة نماذج النصوص واستبعاد الحماية
+                    text_candidates = [
+                        m for m in all_model_ids 
+                        if "guard" not in m.lower() 
+                        and "whisper" not in m.lower() 
+                        and "embed" not in m.lower()
+                        and "canopylabs" not in m.lower()
+                    ]
+                    # ترتيب ذكي: جعل النماذج الكبرى والقوية (70b / versatile) في المقدمة لتكون الخيار الأول دائماً
+                    text_candidates.sort(key=lambda x: ("70b" in x.lower(), "versatile" in x.lower(), "instant" in x.lower()), reverse=True)
+                    
                     if not text_candidates:
                         text_candidates = all_model_ids
                         
@@ -88,7 +98,6 @@ if st.button("إرسال وتحليل صاروخي 🚀"):
                         {"role": "user", "content": user_question}
                     ]
                     
-                    # جرب نماذج النصوص واحد تلو الآخر حتى ينجح واحد تلقائياً
                     for m_id in text_candidates:
                         try:
                             chat_completion = client.chat.completions.create(
@@ -96,16 +105,24 @@ if st.button("إرسال وتحليل صاروخي 🚀"):
                                 model=m_id,
                             )
                             response_text = chat_completion.choices[0].message.content
+                            used_model_name = m_id
                             break
                         except Exception as err:
                             last_error = err
                             continue
                             
                 if response_text:
+                    st.success(f"🚀 تم اختيار التشغيل بنجاح عبر أقوى نموذج متاح: **{used_model_name}**")
+                    
                     st.markdown("### 💡 الإجابة:")
                     st.markdown(response_text)
+                    
+                    # عرض زر نسخ النص المباشر في نهاية الإجابة
+                    st.markdown("---")
+                    st.markdown("📋 **نسخ النص بنقرة واحدة:**")
+                    st.code(response_text, language="markdown")
                 else:
-                    st.error(f"عذراً، لم ينجح أي نموذج متاح في مفتاحك. الخطأ الأخير: {last_error}")
+                    st.error(f"عذراً، لم ينجح أي نموذج في حسابك. الخطأ: {last_error}")
                 
         except Exception as e:
             st.error(f"حدث خطأ عام: {e}")
