@@ -1,16 +1,16 @@
 import os
 import io
+import json
 import base64
 
 import streamlit as st
 from PIL import Image
 from groq import Groq
-from openai import OpenAI
 
 
-# =========================
-# الإعدادات
-# =========================
+# =====================================
+# 1. الإعدادات
+# =====================================
 
 st.set_page_config(
     page_title="مساعد الذكاء الاصطناعي",
@@ -18,29 +18,34 @@ st.set_page_config(
     layout="wide"
 )
 
-MAX_TOKENS = 512
+CHAT_MODEL = "openai/gpt-oss-120b"
+VISION_MODEL = "qwen/qwen3.8-27b"
 
-# النموذجان المطلوبان
-VISION_MODEL_ID = "qwen/qwen3.8-27b"
-CHAT_MODEL_ID = "openai/gpt-oss-120b"
+MAX_TOKENS = 512
+HISTORY_LIMIT = 12
 
 SYSTEM_PROMPT = """
-أنت مساعد ذكاء اصطناعي عربي دقيق ومباشر.
+أنت مساعد ذكاء اصطناعي عربي دقيق وقوي في التحليل والرياضيات
+والعلوم والبرمجة والكتابة والتعليم.
 
-القواعد:
-- لا تخترع معلومات أو مصادر.
-- إذا لم تكن متأكدًا، وضّح ذلك.
-- فرّق بين الحقائق والفرضيات.
-- أجب مباشرة دون حشو.
-- صحح الأخطاء باختصار.
-- استخدم العربية الواضحة إلا إذا طُلبت لغة أخرى.
-- في المسائل العلمية والرياضية، تحقق من الإجابة قبل تقديمها.
+قواعد الدقة:
+- لا تختلق حقائق أو مصادر أو روابط.
+- لا تقل إنك بحثت في الإنترنت إلا إذا استُخدمت أداة البحث فعلًا.
+- عند البحث، استند إلى نتائج البحث المتاحة، واذكر المصادر التي
+  يوفرها النظام دون اختراع روابط.
+- فرّق بين المعلومة المؤكدة والاستنتاج والفرضية.
+- إذا لم تكن متأكدًا، قل ذلك بوضوح.
+- تحقق من الحسابات والاستنتاجات قبل الإجابة.
+- إذا كان السؤال يعتمد على معلومات حديثة، فابحث عند توفر أداة البحث.
+- لا توافق المستخدم لمجرد إرضائه؛ صحح الخطأ بأدب.
+- أجب بالعربية الواضحة وباختصار مناسب، إلا إذا طُلب التفصيل.
+- لا تعرض التفكير الداخلي الخاص؛ قدم النتيجة والأسباب المفيدة فقط.
 """
 
 
-# =========================
-# التصميم
-# =========================
+# =====================================
+# 2. التصميم
+# =====================================
 
 st.markdown(
     """
@@ -83,9 +88,9 @@ st.markdown(
 )
 
 
-# =========================
-# مفاتيح API
-# =========================
+# =====================================
+# 3. مفتاح Groq
+# =====================================
 
 def get_secret(name):
     value = os.getenv(name)
@@ -100,8 +105,6 @@ def get_secret(name):
 
 
 GROQ_API_KEY = get_secret("GROQ_API_KEY")
-OPENAI_API_KEY = get_secret("OPENAI_API_KEY")
-
 
 if not GROQ_API_KEY:
     st.error(
@@ -110,56 +113,142 @@ if not GROQ_API_KEY:
     )
     st.stop()
 
+client = Groq(api_key=GROQ_API_KEY)
 
-groq_client = Groq(api_key=GROQ_API_KEY)
 
-
-# =========================
-# جلب النماذج المتاحة
-# =========================
+# =====================================
+# 4. فحص النماذج
+# =====================================
 
 @st.cache_data(ttl=300)
-def get_models(api_key):
-    client = Groq(api_key=api_key)
+def get_models():
     result = client.models.list()
-
-    return sorted([
-        model.id for model in result.data
-    ])
+    return sorted(model.id for model in result.data)
 
 
 try:
-    models = get_models(GROQ_API_KEY)
+    available_models = get_models()
 except Exception as e:
-    st.error(f"تعذر جلب نماذج Groq: {e}")
+    st.error(f"تعذر جلب النماذج: {e}")
     st.stop()
 
 
-if not models:
-    st.error("لم تظهر نماذج متاحة في حساب Groq.")
-    st.stop()
+chat_available = CHAT_MODEL in available_models
+vision_available = VISION_MODEL in available_models
 
 
-# =========================
-# تحديد النماذج
-# =========================
+# =====================================
+# 5. ذاكرة المحادثة داخل الجلسة
+# =====================================
 
-chat_model_available = CHAT_MODEL_ID in models
-vision_model_available = VISION_MODEL_ID in models
+if "messages" not in st.session_state:
+    st.session_state.messages = []
 
-# استبعاد نموذج الصور من قائمة الدردشة عند توفره
-text_models = [
-    model for model in models
-    if model != VISION_MODEL_ID
-]
-
-if not text_models:
-    text_models = models
+if "last_sources" not in st.session_state:
+    st.session_state.last_sources = []
 
 
-# =========================
-# تحويل الصورة
-# =========================
+# =====================================
+# 6. حفظ واستعادة سجل المحادثة
+# =====================================
+
+with st.sidebar:
+    st.header("⚙️ الإعدادات")
+
+    st.caption(f"الدردشة: {CHAT_MODEL}")
+    st.caption(f"الصور: {VISION_MODEL}")
+
+    if not chat_available:
+        st.warning(
+            "نموذج الدردشة غير ظاهر في قائمة حسابك في Groq."
+        )
+
+    if not vision_available:
+        st.warning(
+            "نموذج الصور غير ظاهر في قائمة حسابك في Groq."
+        )
+
+    st.divider()
+    st.subheader("💾 ذاكرة المحادثة")
+
+    history_json = json.dumps(
+        st.session_state.messages,
+        ensure_ascii=False,
+        indent=2
+    )
+
+    st.download_button(
+        "حفظ المحادثة كملف",
+        data=history_json,
+        file_name="chat_history.json",
+        mime="application/json",
+        use_container_width=True
+    )
+
+    uploaded_history = st.file_uploader(
+        "استعادة محادثة محفوظة",
+        type=["json"],
+        key="history_import"
+    )
+
+    if st.button(
+        "استعادة الملف",
+        use_container_width=True
+    ):
+        if uploaded_history is None:
+            st.warning("ارفع ملف المحادثة أولًا.")
+        else:
+            try:
+                data = json.load(uploaded_history)
+
+                if not isinstance(data, list):
+                    raise ValueError("تنسيق الملف غير صحيح.")
+
+                valid_messages = []
+
+                for item in data:
+                    if (
+                        isinstance(item, dict)
+                        and item.get("role") in ["user", "assistant"]
+                        and isinstance(item.get("content"), str)
+                    ):
+                        valid_messages.append({
+                            "role": item["role"],
+                            "content": item["content"]
+                        })
+
+                st.session_state.messages = valid_messages
+                st.session_state.last_sources = []
+
+                st.success("تمت استعادة سجل المحادثة.")
+                st.rerun()
+
+            except Exception as e:
+                st.error(f"تعذرت استعادة الملف: {e}")
+
+    if st.button(
+        "مسح المحادثة الحالية",
+        use_container_width=True
+    ):
+        st.session_state.messages = []
+        st.session_state.last_sources = []
+        st.rerun()
+
+    st.divider()
+
+    enable_web_search = st.toggle(
+        "🔎 البحث في الإنترنت",
+        value=False
+    )
+
+    st.caption(
+        "البحث يستخدم نموذج GPT-OSS 120B وأداة البحث المدمجة."
+    )
+
+
+# =====================================
+# 7. تحويل الصورة
+# =====================================
 
 def image_to_data_url(image_file, max_side=768):
     image_file.seek(0)
@@ -172,7 +261,7 @@ def image_to_data_url(image_file, max_side=768):
     image.save(
         buffer,
         format="JPEG",
-        quality=60,
+        quality=70,
         optimize=True
     )
 
@@ -183,168 +272,242 @@ def image_to_data_url(image_file, max_side=768):
     return f"data:image/jpeg;base64,{encoded}"
 
 
-# =========================
-# الدردشة النصية
-# =========================
+# =====================================
+# 8. تجهيز تاريخ المحادثة للنموذج
+# =====================================
 
-def call_chat(client, model, user_text):
+def build_history():
+    history = []
+
+    for item in st.session_state.messages[-HISTORY_LIMIT:]:
+        if item["role"] in ["user", "assistant"]:
+            history.append({
+                "role": item["role"],
+                "content": item["content"]
+            })
+
+    return history
+
+
+# =====================================
+# 9. استخراج الروابط إن أعادها API
+# =====================================
+
+def extract_urls(obj):
+    found = []
+
+    def walk(value):
+        if isinstance(value, dict):
+            url = value.get("url")
+            title = value.get("title") or value.get("name")
+
+            if (
+                isinstance(url, str)
+                and url.startswith(("https://", "http://"))
+            ):
+                found.append({
+                    "title": str(title or url),
+                    "url": url
+                })
+
+            for child in value.values():
+                walk(child)
+
+        elif isinstance(value, list):
+            for child in value:
+                walk(child)
+
+    walk(obj)
+
+    unique = []
+    seen = set()
+
+    for source in found:
+        if source["url"] not in seen:
+            seen.add(source["url"])
+            unique.append(source)
+
+    return unique
+
+
+# =====================================
+# 10. الدردشة العادية
+# =====================================
+
+def call_chat(user_text):
+    messages = [
+        {
+            "role": "system",
+            "content": SYSTEM_PROMPT
+        }
+    ]
+
+    messages.extend(build_history())
+
+    messages.append({
+        "role": "user",
+        "content": user_text
+    })
+
     response = client.chat.completions.create(
-        model=model,
-        messages=[
-            {
-                "role": "system",
-                "content": SYSTEM_PROMPT
-            },
-            {
-                "role": "user",
-                "content": user_text
-            }
-        ],
+        model=CHAT_MODEL,
+        messages=messages,
         temperature=0.2,
         max_tokens=MAX_TOKENS
     )
 
-    return response.choices[0].message.content
+    return response.choices[0].message.content or ""
 
 
-# =========================
-# تحليل الصور
-# =========================
+# =====================================
+# 11. البحث في الإنترنت
+# =====================================
 
-def analyze_image(client, model, user_text, image_file):
+def research_with_web(user_text):
+    if not chat_available:
+        raise RuntimeError(
+            "نموذج GPT-OSS 120B غير متاح في حسابك."
+        )
+
+    messages = [
+        {
+            "role": "system",
+            "content": SYSTEM_PROMPT
+            + """
+عند استخدام البحث:
+- ابحث عن المعلومات ذات الصلة بالسؤال.
+- أعط الأولوية للمصادر الأصلية والموثوقة والحديثة.
+- لا تعتمد على نتيجة بحث لا تدعم الادعاء.
+- اذكر تاريخ المعلومات عندما يكون مهمًا.
+- لا تخترع روابط أو مراجع.
+"""
+        }
+    ]
+
+    messages.extend(build_history())
+
+    messages.append({
+        "role": "user",
+        "content": user_text
+    })
+
+    response = client.chat.completions.create(
+        model=CHAT_MODEL,
+        messages=messages,
+        tools=[
+            {"type": "browser_search"}
+        ],
+        tool_choice="required",
+        temperature=0.2,
+        max_tokens=MAX_TOKENS
+    )
+
+    message = response.choices[0].message
+
+    # نحاول التقاط روابط المصادر إن أتاحها الرد
+    try:
+        response_data = response.model_dump()
+    except Exception:
+        response_data = {}
+
+    sources = extract_urls(response_data)
+
+    return message.content or "", sources
+
+
+# =====================================
+# 12. تحليل الصور
+# =====================================
+
+def analyze_image(user_text, image_file):
+    if not vision_available:
+        raise RuntimeError(
+            f"نموذج الصور {VISION_MODEL} غير متاح في حسابك."
+        )
+
     image_url = image_to_data_url(image_file)
 
-    response = client.chat.completions.create(
-        model=model,
-        messages=[
+    messages = [
+        {
+            "role": "system",
+            "content": SYSTEM_PROMPT
+        }
+    ]
+
+    messages.extend(build_history())
+
+    messages.append({
+        "role": "user",
+        "content": [
             {
-                "role": "system",
-                "content": SYSTEM_PROMPT
+                "type": "text",
+                "text": (
+                    user_text
+                    or "حلل الصورة واشرح محتواها بدقة. "
+                       "ميّز بين ما تراه وما لا تستطيع التأكد منه."
+                )
             },
             {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": (
-                            user_text
-                            or "حلل الصورة واشرح محتواها بدقة."
-                        )
-                    },
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": image_url
-                        }
-                    }
-                ]
+                "type": "image_url",
+                "image_url": {
+                    "url": image_url
+                }
             }
-        ],
+        ]
+    })
+
+    response = client.chat.completions.create(
+        model=VISION_MODEL,
+        messages=messages,
         temperature=0.2,
         max_tokens=MAX_TOKENS
     )
 
-    return response.choices[0].message.content
+    return response.choices[0].message.content or ""
 
 
-# =========================
-# البحث عبر الويب
-# =========================
-
-def research_with_web(question, model):
-    if not OPENAI_API_KEY:
-        return (
-            "البحث عبر الويب يحتاج إلى OPENAI_API_KEY "
-            "وموديل يدعم أداة البحث."
-        )
-
-    try:
-        client = OpenAI(api_key=OPENAI_API_KEY)
-
-        response = client.responses.create(
-            model=model,
-            input=(
-                SYSTEM_PROMPT
-                + "\n\nتحقق من المعلومات وأجب عن السؤال:\n"
-                + question
-            ),
-            tools=[
-                {"type": "web_search"}
-            ]
-        )
-
-        return response.output_text
-
-    except Exception as e:
-        return (
-            "تعذر تنفيذ البحث عبر الويب. "
-            "تحقق من إعدادات API ودعم أداة البحث.\n\n"
-            f"تفاصيل الخطأ: {e}"
-        )
-
-
-# =========================
-# واجهة التطبيق
-# =========================
+# =====================================
+# 13. واجهة المساعد
+# =====================================
 
 st.title("🤖 مساعد الذكاء الاصطناعي")
-st.caption("دردشة ذكية وتحليل صور")
 
-with st.sidebar:
-    st.header("⚙️ الإعدادات")
+st.caption(
+    "دردشة ذكية • تحليل الصور • بحث في الإنترنت • سجل محادثات"
+)
 
-    # اختيار نموذج الدردشة
-    if chat_model_available:
-        default_chat_index = text_models.index(CHAT_MODEL_ID)
-
-        selected_text_model = st.selectbox(
-            "نموذج الدردشة",
-            options=text_models,
-            index=default_chat_index
-        )
-    else:
-        st.warning(
-            f"النموذج {CHAT_MODEL_ID} غير موجود "
-            "في قائمة النماذج المتاحة لحسابك."
-        )
-
-        selected_text_model = st.selectbox(
-            "نموذج الدردشة البديل",
-            options=text_models
-        )
-
-    # اختيار نموذج الصور
-    if vision_model_available:
-        selected_vision_model = st.selectbox(
-            "نموذج تحليل الصور",
-            options=[VISION_MODEL_ID],
-            index=0
-        )
-    else:
-        selected_vision_model = None
-
-        st.error(
-            f"النموذج {VISION_MODEL_ID} غير ظاهر "
-            "في قائمة حسابك. تحقق من النماذج المتاحة في Groq."
-        )
-
-    enable_web_search = st.toggle(
-        "تفعيل البحث عبر الويب",
-        value=False
+if not st.session_state.messages:
+    st.info(
+        "ابدأ بسؤالك. فعّل البحث إذا احتجت معلومات حديثة ومصادر."
     )
 
-    st.caption(f"حد الإخراج: {MAX_TOKENS} توكن")
+
+# عرض سجل المحادثة
+for message in st.session_state.messages:
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
+
+
+# عرض مصادر آخر عملية بحث
+if st.session_state.last_sources:
+    with st.expander("🔗 مصادر وروابط البحث"):
+        for source in st.session_state.last_sources:
+            st.markdown(
+                f"- [{source['title']}]({source['url']})"
+            )
 
 
 user_text = st.text_area(
     "اكتب سؤالك",
     placeholder="اسأل عن أي موضوع...",
-    height=140
+    height=120,
+    key="current_question"
 )
 
 uploaded_image = st.file_uploader(
-    "أرفق صورة للتحليل",
-    type=["png", "jpg", "jpeg", "webp"]
+    "أرفق صورة (اختياري)",
+    type=["png", "jpg", "jpeg", "webp"],
+    key="current_image"
 )
 
 if uploaded_image:
@@ -360,47 +523,53 @@ if st.button(
     type="primary",
     use_container_width=True
 ):
-    if not user_text.strip() and not uploaded_image:
+    if not user_text.strip() and uploaded_image is None:
         st.warning("اكتب سؤالًا أو أرفق صورة أولًا.")
 
     else:
+        question = user_text.strip()
+
+        if uploaded_image is not None:
+            saved_question = (
+                (question + "\n\n") if question else ""
+            ) + "[أرفق المستخدم صورة]"
+        else:
+            saved_question = question
+
         try:
             with st.spinner("جارٍ تجهيز الإجابة..."):
-
-                if uploaded_image:
-                    if not vision_model_available:
-                        st.error(
-                            "نموذج الصور غير متاح في قائمة حسابك، "
-                            "ولذلك لم يُرسل الطلب."
-                        )
-                        st.stop()
-
+                if uploaded_image is not None:
                     answer = analyze_image(
-                        groq_client,
-                        selected_vision_model,
-                        user_text,
+                        question,
                         uploaded_image
                     )
+                    sources = []
 
                 elif enable_web_search:
-                    answer = research_with_web(
-                        user_text,
-                        selected_text_model
-                    )
+                    answer, sources = research_with_web(question)
 
                 else:
-                    answer = call_chat(
-                        groq_client,
-                        selected_text_model,
-                        user_text
-                    )
+                    answer = call_chat(question)
+                    sources = []
 
-            st.subheader("الإجابة")
-            st.markdown(answer)
+            # حفظ السؤال والجواب في ذاكرة الجلسة
+            st.session_state.messages.append({
+                "role": "user",
+                "content": saved_question
+            })
+
+            st.session_state.messages.append({
+                "role": "assistant",
+                "content": answer
+            })
+
+            st.session_state.last_sources = sources
+
+            st.rerun()
 
         except Exception as e:
             st.error(f"حدث خطأ: {e}")
             st.info(
-                "قد يكون النموذج غير متاح لحسابك، "
-                "أو أن الطلب تجاوز حدود الاستخدام."
+                "إذا كان الخطأ متعلقًا بالنموذج، تحقق من ظهوره "
+                "في قائمة نماذج Groq ومن حدود الاستخدام."
             )
