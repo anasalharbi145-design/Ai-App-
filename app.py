@@ -2,17 +2,14 @@ import streamlit as st
 import google.generativeai as genai
 from PIL import Image
 
-# إعداد صفحة التطبيق لتكون واسعة ومرتبة
+# إعداد صفحة التطبيق
 st.set_page_config(page_title="الذكاء الاصطناعي الخارق - أنس", page_icon="⚡", layout="centered")
 
 st.title("⚡ الذكاء الاصطناعي الخارق الخاص بـ أنس")
-st.write("أهلاً بك يا أنس! تطبيقك المطور الآن يعمل بأحدث وأقوى النماذج وبمستوى تفكير تحليلي فائق.")
+st.write("أهلاً بك يا أنس! تطبيقك شغال ومربوط بالمفتاح تلقائياً وجاهز للتحليل الفائق.")
 
-# الشريط الجانبي للإعدادات المفتاحية
-with st.sidebar:
-    st.header("إعدادات النظام الخارق")
-    api_key = st.text_input("أدخل الـ API Key الخاص بك:", type="password")
-    st.info("💡 نصيحة: اكتب سؤالك أو ارفع صورتك بدقة، وسيقوم النظام بالتحليل العميق الفوري.")
+# جلب المفتاح بأمان من إعدادات Streamlit
+MY_API_KEY = st.secrets.get("GEMINI_API_KEY", "")
 
 # خانة رفع الصور
 uploaded_file = st.file_uploader("اختر صورة للتحليل العميق (اختياري):", type=["jpg", "jpeg", "png"])
@@ -21,28 +18,26 @@ uploaded_file = st.file_uploader("اختر صورة للتحليل العميق 
 user_question = st.text_area("اطرح سؤالك أو معضلتك البرمجية/العلمية:")
 
 if st.button("إطلاق التحليل الخارق 🚀"):
-    if not api_key:
-        st.error("يا طويل العمر، لا تنسى تحط الـ API Key في القائمة الجانبية أولاً!")
+    if not MY_API_KEY:
+        st.error("لم يتم العثور على المفتاح في إعدادات Secrets في Streamlit!")
     else:
         try:
-            # ربط المفتاح بالذكاء الاصطناعي
-            genai.configure(api_key=api_key)
+            # تهيئة المفتاح تلقائياً
+            genai.configure(api_key=MY_API_KEY)
             
-            # تهيئة النموذج مع توجيهات نظامية (System Instruction) تخليه دقيق وخارق
+            # توجيهات النظام الاحترافية
             system_instruction = (
                 "أنت خبير تقني وعالم ذكاء اصطناعي عبقري ومحترف جداً. "
                 "أجب عن أسئلة المستخدم (أنس) بعمق شديد، دقة متناهية، وبشرح مفصل وواضح ومنهجي. "
                 "قم بتحليل كل زاوية من السؤال بدقة قبل إعطاء الإجابة النهائية، وتجنب الإجابات السطحية."
             )
             
-            # استخدام موديل فلاش الأحدث والأسرع
             model = genai.GenerativeModel(
                 model_name='gemini-2.5-flash',
                 system_instruction=system_instruction
             )
             
             with st.spinner("جاري التفكير العميق والتحليل الفائق... 🧠"):
-                # معالجة الصور أو النصوص بذكاء متقدم
                 if uploaded_file is not None:
                     image = Image.open(uploaded_file)
                     if user_question:
