@@ -1,6 +1,5 @@
 import streamlit as st
 from groq import Groq
-from PIL import Image
 
 st.set_page_config(
     page_title="الذكاء الموسوعي الخارق - أنس",
@@ -20,7 +19,7 @@ st.markdown("""
 st.title("⚡ الذكاء الموسوعي الخارق (Groq Engine)")
 st.caption("مرحباً بك يا أنس، السرعة القصوى والأداء الفائق.")
 
-# جلب مفتاح Groq من الـ Secrets بأمان
+# جلب مفتاح Groq من الـ Secrets
 GROQ_API_KEY = st.secrets.get("GROQ_API_KEY", "")
 
 user_question = st.text_area("اطرح سؤالك أو معضلتك هنا:", placeholder="اكتب ما تبحث عنه...")
@@ -37,7 +36,7 @@ if st.button("إرسال وتحليل صاروخي 🚀"):
                 st.stop()
             
             with st.spinner("جاري المعالجة بسرعة البرق... ⚡"):
-                # استخدام نموذج لاما المعتمد والسريع جداً على Groq
+                # استخدام الموديل القياسي والمباشر المتاح في Groq
                 chat_completion = client.chat.completions.create(
                     messages=[
                         {
@@ -49,7 +48,7 @@ if st.button("إرسال وتحليل صاروخي 🚀"):
                             "content": user_question,
                         }
                     ],
-                    model="llama-3.1-8b-instant",
+                    model="llama3-8b-8192",
                 )
                 
                 response_text = chat_completion.choices[0].message.content
