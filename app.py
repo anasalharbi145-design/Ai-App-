@@ -35,14 +35,6 @@ if st.button("إرسال وتحليل صاروخي 🚀"):
                 st.stop()
             
             with st.spinner("جاري المعالجة بسرعة البرق... ⚡"):
-                # اختيار الموديل تلقائياً لمنع أي أخطاء توقف مستقبلية
-                try:
-                    models = client.models.list()
-                    available_models = [m.id for m in models.data if "llama" in m.id]
-                    model_to_use = available_models[0] if available_models else "llama-3.3-70b-versatile"
-                except:
-                    model_to_use = "llama-3.3-70b-versatile"
-
                 chat_completion = client.chat.completions.create(
                     messages=[
                         {
@@ -54,7 +46,7 @@ if st.button("إرسال وتحليل صاروخي 🚀"):
                             "content": user_question,
                         }
                     ],
-                    model=model_to_use,
+                    model="llama-3.3-70b-versatile",
                 )
                 
                 response_text = chat_completion.choices[0].message.content
