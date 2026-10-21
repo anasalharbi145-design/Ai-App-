@@ -34,46 +34,38 @@ if st.button("إرسال وتحليل صاروخي 🚀"):
                 st.warning("الرجاء كتابة سؤال للبدء.")
                 st.stop()
             
-            with st.spinner("جاري المعالجة بسرعة البرق... ⚡"):
-                # قائمة بالنماذج المتاحة في Groq بالترتيب
-                candidate_models = [
-                    "llama-3.1-8b-instant",
-                    "llama-3.3-70b-versatile",
-                    "llama3-70b-8192",
-                    "mixtral-8x7b-32768"
+            with st.spinner("جاري جلب النماذج المتاحة والمعالجة بسرعة البرق... ⚡"):
+                # جلب قائمة النماذج الفعالة حالياً واستبعاد نماذج الحماية والتصنيف
+                all_models = client.models.list()
+                valid_models = [
+                    m.id for m in all_models.data 
+                    if "guard" not in m.id.lower() and "whisper" not in m.id.lower()
                 ]
                 
-                chat_completion = None
-                last_error = None
+                if not valid_models:
+                    st.error("لم يتم العثور على نماذج محادثة نشطة في الحساب.")
+                    st.stop()
                 
-                # المحاولة عبر النماذج المتاحة تلقائياً
-                for model_name in candidate_models:
-                    try:
-                        chat_completion = client.chat.completions.create(
-                            messages=[
-                                {
-                                    "role": "system",
-                                    "content": "أنت خبير موسوعي وعالم ذكاء اصطناعي فائق الذكاء، ملم بجميع العلوم والمعارف. أجب بعمق ودقة علمية عالية."
-                                },
-                                {
-                                    "role": "user",
-                                    "content": user_question,
-                                }
-                            ],
-                            model=model_name,
-                        )
-                        if chat_completion:
-                            break
-                    except Exception as err:
-                        last_error = err
-                        continue
+                # استخدام أول نموذج محادثة شغال ومتاح
+                active_model = valid_models[0]
                 
-                if chat_completion:
-                    response_text = chat_completion.choices[0].message.content
-                    st.markdown("### 💡 الإجابة:")
-                    st.markdown(response_text)
-                else:
-                    st.error(f"تعذر الاتصال بجميع النماذج. الخطأ: {last_error}")
+                chat_completion = client.chat.completions.create(
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": "أنت خبير موسوعي وعالم ذكاء اصطناعي فائق الذكاء، ملم بجميع العلوم والمعارف. أجب بعمق ودقة علمية عالية."
+                        },
+                        {
+                            "role": "user",
+                            "content": user_question,
+                        }
+                    ],
+                    model=active_model,
+                )
+                
+                response_text = chat_completion.choices[0].message.content
+                st.markdown("### 💡 الإجابة:")
+                st.markdown(response_text)
                 
         except Exception as e:
             st.error(f"حدث خطأ: {e}")
