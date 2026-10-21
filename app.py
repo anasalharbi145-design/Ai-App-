@@ -18,11 +18,10 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.title("⚡ الذكاء الموسوعي الخارق (Groq Engine)")
-st.caption("مرحباً بك يا أنس، يدعم النصوص والصور بدقة عالية.")
+st.caption("مرحباً بك يا أنس، النظام الذكي بدون أخطاء موديلات.")
 
 GROQ_API_KEY = st.secrets.get("GROQ_API_KEY", "")
 
-# إضافة خيار رفع الصور
 uploaded_file = st.file_uploader("ارفق صورة للتحليل البصري (اختياري):", type=["jpg", "jpeg", "png"])
 user_question = st.text_area("اطرح سؤالك أو معضلتك هنا:", placeholder="اكتب ما تبحث عنه...")
 
@@ -37,15 +36,17 @@ if st.button("إرسال وتحليل صاروخي 🚀"):
                 st.warning("الرجاء كتابة سؤال أو رفع صورة للبدء.")
                 st.stop()
             
-            with st.spinner("جاري المعالجة وتحليل البيانات... ⚡"):
-                # إذا تم إرفاق صورة، نستخدم نموذج الرؤية الداعم للصور في Groq
+            with st.spinner("جاري جلب النموذج المتاح والمعالجة... ⚡"):
+                # جلب كل الموديلات المتاحة في حسابك المباشر
+                all_models = [m.id for m in client.models.list().data]
+                
                 if uploaded_file is not None:
-                    model_to_use = "llama-3.2-11b-vision-preview"
+                    # اختيار موديل يدعم الصور من الحساب
+                    vision_models = [m for m in all_models if "vision" in m.lower() or "llava" in m.lower()]
+                    model_to_use = vision_models[0] if vision_models else "llama-3.2-11b-vision-preview"
                     
-                    # تحويل الصورة إلى Base64
                     bytes_data = uploaded_file.getvalue()
                     base64_image = base64.b64encode(bytes_data).decode('utf-8')
-                    
                     file_extension = uploaded_file.name.split('.')[-1].lower()
                     mime_type = f"image/{'jpeg' if file_extension in ['jpg', 'jpeg'] else file_extension}"
                     
@@ -53,31 +54,19 @@ if st.button("إرسال وتحليل صاروخي 🚀"):
                         {
                             "role": "user",
                             "content": [
-                                {
-                                    "type": "text", 
-                                    "text": user_question if user_question else "حلل هذه الصورة واشرح ما فيها بالتفصيل."
-                                },
-                                {
-                                    "type": "image_url",
-                                    "image_url": {
-                                        "url": f"data:{mime_type};base64,{base64_image}"
-                                    }
-                                }
+                                {"type": "text", "text": user_question if user_question else "اشرح هذه الصورة بالتفصيل."},
+                                {"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{base64_image}"}}
                             ]
                         }
                     ]
                 else:
-                    # إذا كانت رسالة نصية فقط، نستخدم نموذج النص القوي
-                    model_to_use = "llama-3.3-70b-versatile"
+                    # اختيار أول موديل محادثة نصوص فعال في حسابك تلقائياً
+                    text_models = [m for m in all_models if "guard" not in m.lower() and "whisper" not in m.lower() and "vision" not in m.lower()]
+                    model_to_use = text_models[0] if text_models else all_models[0]
+                    
                     messages = [
-                        {
-                            "role": "system",
-                            "content": "أنت خبير موسوعي وعالم ذكاء اصطناعي فائق الذكاء، ملم بجميع العلوم والمعارف. أجب بعمق ودقة علمية عالية."
-                        },
-                        {
-                            "role": "user",
-                            "content": user_question,
-                        }
+                        {"role": "system", "content": "أنت خبير موسوعي وعالم ذكاء اصطناعي فائق الذكاء، أجب بعمق ودقة علمية عالية."},
+                        {"role": "user", "content": user_question}
                     ]
 
                 chat_completion = client.chat.completions.create(
@@ -86,7 +75,6 @@ if st.button("إرسال وتحليل صاروخي 🚀"):
                 )
                 
                 response_text = chat_completion.choices[0].message.content
-                
                 st.markdown("### 💡 الإجابة:")
                 st.markdown(response_text)
                 
