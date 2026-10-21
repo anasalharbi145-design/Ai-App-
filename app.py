@@ -8,7 +8,7 @@ st.set_page_config(page_title="الذكاء الاصطناعي الخارق - أ
 st.title("⚡ الذكاء الاصطناعي الخارق الخاص بـ أنس")
 st.write("أهلاً بك يا أنس! تطبيقك شغال ومربوط بالمفتاح تلقائياً وجاهز للتحليل الفائق.")
 
-# جلب المفتاح بأمان من إعدادات Streamlit
+# جلب المفتاح بأمان من إعدادات Streamlit Secrets
 MY_API_KEY = st.secrets.get("GEMINI_API_KEY", "")
 
 # خانة رفع الصور
@@ -32,8 +32,9 @@ if st.button("إطلاق التحليل الخارق 🚀"):
                 "قم بتحليل كل زاوية من السؤال بدقة قبل إعطاء الإجابة النهائية، وتجنب الإجابات السطحية."
             )
             
+            # استخدام أحدث نموذج كما طلبت جوجل في رسالة الخطأ
             model = genai.GenerativeModel(
-                model_name='gemini-2.5-flash',
+                model_name='gemini-3.8-flash',
                 system_instruction=system_instruction
             )
             
