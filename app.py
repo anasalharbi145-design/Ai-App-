@@ -18,12 +18,22 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.title("⚡ الذكاء الموسوعي الخارق (Groq Engine)")
-st.caption("مرحباً بك يا أنس، استنتاج أقوى نموذج متاح مع زر النسخ المباشر.")
+st.caption("مرحباً بك يا أنس، دقة علمية صارمة مع زر النسخ المباشر.")
 
 GROQ_API_KEY = st.secrets.get("GROQ_API_KEY", "")
 
 uploaded_file = st.file_uploader("ارفق صورة للتحليل البصري (اختياري):", type=["jpg", "jpeg", "png"])
 user_question = st.text_area("اطرح سؤالك أو معضلتك هنا:", placeholder="اكتب ما تبحث عنه...")
+
+# توجيه صارم للموديل لضمان الأمانة والدقة العلمية التامة
+STRICT_SYSTEM_PROMPT = """
+أنت عالم ومرجع موسوعي عالي الدقة والانضباط العلمي.
+عند إجابتك على أي سؤال، يجب عليك الالتزام بالقواعد التالية بكل صرامة:
+1. الفصل التام والمباشر بين الحقائق العلمية المثبتة تجريبياً والفرضيات/النظريات الاستكشافية.
+2. التحري الدقيق للتواريخ، الأسماء، المصطلحات، والمفاهيم الفيزياء والتقنية بدون أي زيادة أو تعديل غير موثوق.
+3. تجنب التهويل أو الصياغة البلاغية التي تعطي انطباعاً بأن الفرضيات أصبحت واقعاً حسوماً.
+4. إذا كان هناك مفهوم غير محسوم تجريبياً، صرح بذلك بوضوح ودون تردد.
+"""
 
 if st.button("إرسال وتحليل صاروخي 🚀"):
     if not GROQ_API_KEY:
@@ -36,7 +46,7 @@ if st.button("إرسال وتحليل صاروخي 🚀"):
                 st.warning("الرجاء كتابة سؤال أو رفع صورة للبدء.")
                 st.stop()
             
-            with st.spinner("جاري استنتاج واختبار أقوى نموذج متاح في حسابك... ⚡"):
+            with st.spinner("جاري استنتاج أقوى نموذج متاح ومعالجة الإجابة بدقة علمية... ⚡"):
                 models_response = client.models.list()
                 all_model_ids = [m.id for m in models_response.data]
                 
@@ -45,7 +55,6 @@ if st.button("إرسال وتحليل صاروخي 🚀"):
                 last_error = None
                 
                 if uploaded_file is not None:
-                    # فلترة وترتيب نماذج الصور (تفضيل الأقوى والأحدث)
                     vision_candidates = [m for m in all_model_ids if any(k in m.lower() for k in ["vision", "llava", "90b", "11b"])]
                     vision_candidates.sort(key=lambda x: ("90b" in x.lower(), "vision" in x.lower()), reverse=True)
                     if not vision_candidates:
@@ -57,10 +66,11 @@ if st.button("إرسال وتحليل صاروخي 🚀"):
                     mime_type = f"image/{'jpeg' if file_extension in ['jpg', 'jpeg'] else file_extension}"
                     
                     messages = [
+                        {"role": "system", "content": STRICT_SYSTEM_PROMPT},
                         {
                             "role": "user",
                             "content": [
-                                {"type": "text", "text": user_question if user_question else "اشرح هذه الصورة بالتفصيل."},
+                                {"type": "text", "text": user_question if user_question else "اشرح هذه الصورة بالتفصيل والدقة العلمية."},
                                 {"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{base64_image}"}}
                             ]
                         }
@@ -79,7 +89,6 @@ if st.button("إرسال وتحليل صاروخي 🚀"):
                             last_error = err
                             continue
                 else:
-                    # فلترة نماذج النصوص واستبعاد الحماية
                     text_candidates = [
                         m for m in all_model_ids 
                         if "guard" not in m.lower() 
@@ -87,14 +96,13 @@ if st.button("إرسال وتحليل صاروخي 🚀"):
                         and "embed" not in m.lower()
                         and "canopylabs" not in m.lower()
                     ]
-                    # ترتيب ذكي: جعل النماذج الكبرى والقوية (70b / versatile) في المقدمة لتكون الخيار الأول دائماً
                     text_candidates.sort(key=lambda x: ("70b" in x.lower(), "versatile" in x.lower(), "instant" in x.lower()), reverse=True)
                     
                     if not text_candidates:
                         text_candidates = all_model_ids
                         
                     messages = [
-                        {"role": "system", "content": "أنت خبير موسوعي وعالم ذكاء اصطناعي فائق الذكاء، أجب بعمق ودقة علمية عالية."},
+                        {"role": "system", "content": STRICT_SYSTEM_PROMPT},
                         {"role": "user", "content": user_question}
                     ]
                     
@@ -112,12 +120,11 @@ if st.button("إرسال وتحليل صاروخي 🚀"):
                             continue
                             
                 if response_text:
-                    st.success(f"🚀 تم اختيار التشغيل بنجاح عبر أقوى نموذج متاح: **{used_model_name}**")
+                    st.success(f"🚀 تم التحليل عبر النموذج: **{used_model_name}** (مع التزام الدقة العلمية)")
                     
                     st.markdown("### 💡 الإجابة:")
                     st.markdown(response_text)
                     
-                    # عرض زر نسخ النص المباشر في نهاية الإجابة
                     st.markdown("---")
                     st.markdown("📋 **نسخ النص بنقرة واحدة:**")
                     st.code(response_text, language="markdown")
