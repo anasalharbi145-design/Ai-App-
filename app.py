@@ -36,13 +36,12 @@ if st.button("إرسال وتحليل صاروخي 🚀"):
                 st.warning("الرجاء كتابة سؤال أو رفع صورة للبدء.")
                 st.stop()
             
-            with st.spinner("جاري جلب النموذج المتاح والمعالجة... ⚡"):
-                # جلب كل الموديلات المتاحة في حسابك المباشر
+            with st.spinner("جاري المعالجة... ⚡"):
                 all_models = [m.id for m in client.models.list().data]
                 
                 if uploaded_file is not None:
-                    # اختيار موديل يدعم الصور من الحساب
-                    vision_models = [m for m in all_models if "vision" in m.lower() or "llava" in m.lower()]
+                    # اختيار موديل رؤية موثوق ويدعم الصور
+                    vision_models = [m for m in all_models if "vision" in m.lower() or "11b" in m.lower()]
                     model_to_use = vision_models[0] if vision_models else "llama-3.2-11b-vision-preview"
                     
                     bytes_data = uploaded_file.getvalue()
@@ -60,9 +59,14 @@ if st.button("إرسال وتحليل صاروخي 🚀"):
                         }
                     ]
                 else:
-                    # اختيار أول موديل محادثة نصوص فعال في حسابك تلقائياً
-                    text_models = [m for m in all_models if "guard" not in m.lower() and "whisper" not in m.lower() and "vision" not in m.lower()]
-                    model_to_use = text_models[0] if text_models else all_models[0]
+                    # فلترة النماذج لتختار فقط نماذج Llama المتاحة والمفتوحة بدون شروط
+                    llama_models = [
+                        m for m in all_models 
+                        if "llama" in m.lower() 
+                        and "guard" not in m.lower() 
+                        and "canopylabs" not in m.lower()
+                    ]
+                    model_to_use = llama_models[0] if llama_models else "llama-3.1-8b-instant"
                     
                     messages = [
                         {"role": "system", "content": "أنت خبير موسوعي وعالم ذكاء اصطناعي فائق الذكاء، أجب بعمق ودقة علمية عالية."},
