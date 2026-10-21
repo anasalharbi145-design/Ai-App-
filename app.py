@@ -2,7 +2,6 @@ import streamlit as st
 import google.generativeai as genai
 from PIL import Image
 
-# 1. إعداد واجهة التطبيق وتصميم الـ CSS
 st.set_page_config(
     page_title="الذكاء الموسوعي الخارق - أنس",
     page_icon="⚡",
@@ -11,42 +10,18 @@ st.set_page_config(
 
 st.markdown("""
     <style>
-    .main {
-        background-color: #0e1117;
-        color: #ffffff;
-    }
-    .stTextArea textarea {
-        background-color: #161b22;
-        color: #ffffff;
-        border-radius: 12px;
-        border: 1px solid #30363d;
-    }
-    .stButton button {
-        background-color: #238636;
-        color: white;
-        border-radius: 10px;
-        font-weight: bold;
-        border: none;
-        width: 100%;
-        padding: 10px;
-    }
-    .stButton button:hover {
-        background-color: #2ea043;
-    }
+    .main { background-color: #0e1117; color: #ffffff; }
+    .stTextArea textarea { background-color: #161b22; color: #ffffff; border-radius: 12px; border: 1px solid #30363d; }
+    .stButton button { background-color: #238636; color: white; border-radius: 10px; font-weight: bold; border: none; width: 100%; padding: 10px; }
+    .stButton button:hover { background-color: #2ea043; }
     </style>
 """, unsafe_allow_html=True)
 
-# عنوان التطبيق الأنيق
 st.title("⚡ الذكاء الموسوعي الخارق")
 st.caption("مرحباً بك يا أنس، منصتك الخاصة للتحليل والبحث الفائق.")
 
-# جلب المفتاح بأمان من إعدادات Streamlit Secrets
 MY_API_KEY = st.secrets.get("GEMINI_API_KEY", "")
-
-# خانة رفع الصور
 uploaded_file = st.file_uploader("ارفق صورة للتحليل البصري (اختياري):", type=["jpg", "jpeg", "png"])
-
-# خانة السؤال أو المشكلة
 user_question = st.text_area("اطرح سؤالك أو معضلتك هنا:", placeholder="اكتب ما تبحث عنه...")
 
 if st.button("إرسال وتحليل 🚀"):
@@ -56,10 +31,9 @@ if st.button("إرسال وتحليل 🚀"):
         try:
             genai.configure(api_key=MY_API_KEY)
             
-            # استخدام أسلوب الاتصال المباشر والمدعوم للنماذج الحالية بدون مشاكل v1beta
-            model = genai.GenerativeModel('gemini-1.5-flash')
+            # استدعاء النموذج بالطريقة المباشرة والآمنة
+            model = genai.GenerativeModel('gemini-1.5-flash-latest')
             
-            # توجيهات النظام والرسالة معاً بطريقة آمنة
             prompt_text = (
                 "أنت خبير موسوعي وعالم ذكاء اصطناعي فائق الذكاء، ملم بجميع العلوم والمعارف البشرية. "
                 "أجب عن السؤال التالي بعمق، ودقة علمية عالية، ومعلومات غنية دون إجابات سطحيّة:\n\n" + user_question
