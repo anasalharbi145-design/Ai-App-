@@ -2,14 +2,13 @@ import streamlit as st
 import google.generativeai as genai
 from PIL import Image
 
-# 1. إعداد واجهة التطبيق وتصميم الـ CSS لتكون شبيهة بواجهة الشات الحديثة
+# 1. إعداد واجهة التطبيق وتصميم الـ CSS
 st.set_page_config(
     page_title="الذكاء الموسوعي الخارق - أنس",
     page_icon="⚡",
     layout="centered"
 )
 
-# تخصيص التصميم والألوان لتكون مرتبة وعصرية
 st.markdown("""
     <style>
     .main {
@@ -44,7 +43,7 @@ st.caption("مرحباً بك يا أنس، منصتك الخاصة للتحلي
 # جلب المفتاح بأمان من إعدادات Streamlit Secrets
 MY_API_KEY = st.secrets.get("GEMINI_API_KEY", "")
 
-# خانة رفع الصور بتصميم مبسط
+# خانة رفع الصور
 uploaded_file = st.file_uploader("ارفق صورة للتحليل البصري (اختياري):", type=["jpg", "jpeg", "png"])
 
 # خانة السؤال أو المشكلة
@@ -62,8 +61,9 @@ if st.button("إرسال وتحليل 🚀"):
                 "أجب عن أي سؤال يطرحه المستخدم (أنس) بعمق، ودقة علمية عالية، ومعلومات دقيقة وغنية دون إجابات سطحيّة."
             )
             
+            # استخدام موديل 1.5 فلاش لضمان عدم ظهور أخطاء النماذج القديمة وتجاوز المشكلة فوراً
             model = genai.GenerativeModel(
-                model_name='gemini-2.5-flash',
+                model_name='gemini-1.5-flash',
                 system_instruction=system_instruction
             )
             
