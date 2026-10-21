@@ -20,7 +20,8 @@ if st.button("إرسال 🚀"):
     else:
         try:
             genai.configure(api_key=api_key)
-            model = genai.GenerativeModel('gemini-1.5-flash')
+            model = genai.GenerativeModel('gemini-3.8-flash')
+
             
             with st.spinner("جاري المعالجة والتفكير..."):
                 # التحقق إذا فيه صورة مرفوعة أو لا
