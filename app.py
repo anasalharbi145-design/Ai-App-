@@ -18,7 +18,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.title("⚡ الذكاء الموسوعي الخارق (Groq Engine)")
-st.caption("مرحباً بك يا أنس، النظام الذكي بدون أخطاء موديلات.")
+st.caption("مرحباً بك يا أنس، النظام الذكي الديناميكي بالكامل.")
 
 GROQ_API_KEY = st.secrets.get("GROQ_API_KEY", "")
 
@@ -36,14 +36,20 @@ if st.button("إرسال وتحليل صاروخي 🚀"):
                 st.warning("الرجاء كتابة سؤال أو رفع صورة للبدء.")
                 st.stop()
             
-            with st.spinner("جاري المعالجة... ⚡"):
-                all_models = [m.id for m in client.models.list().data]
+            with st.spinner("جاري اختبار النماذج المتاحة في حسابك والمعالجة... ⚡"):
+                # جلب قائمة كل الموديلات الموجودة في المفتاح
+                models_response = client.models.list()
+                all_model_ids = [m.id for m in models_response.data]
+                
+                response_text = None
+                last_error = None
                 
                 if uploaded_file is not None:
-                    # اختيار موديل رؤية موثوق ويدعم الصور
-                    vision_models = [m for m in all_models if "vision" in m.lower() or "11b" in m.lower()]
-                    model_to_use = vision_models[0] if vision_models else "llama-3.2-11b-vision-preview"
-                    
+                    # فلترة نماذج الصور
+                    vision_candidates = [m for m in all_model_ids if any(k in m.lower() for k in ["vision", "llava", "11b", "90b"])]
+                    if not vision_candidates:
+                        vision_candidates = all_model_ids
+                        
                     bytes_data = uploaded_file.getvalue()
                     base64_image = base64.b64encode(bytes_data).decode('utf-8')
                     file_extension = uploaded_file.name.split('.')[-1].lower()
@@ -58,29 +64,48 @@ if st.button("إرسال وتحليل صاروخي 🚀"):
                             ]
                         }
                     ]
-                else:
-                    # فلترة النماذج لتختار فقط نماذج Llama المتاحة والمفتوحة بدون شروط
-                    llama_models = [
-                        m for m in all_models 
-                        if "llama" in m.lower() 
-                        and "guard" not in m.lower() 
-                        and "canopylabs" not in m.lower()
-                    ]
-                    model_to_use = llama_models[0] if llama_models else "llama-3.1-8b-instant"
                     
+                    # جرب نماذج الصور واحد تلو الآخر حتى ينجح واحد
+                    for m_id in vision_candidates:
+                        try:
+                            chat_completion = client.chat.completions.create(
+                                messages=messages,
+                                model=m_id,
+                            )
+                            response_text = chat_completion.choices[0].message.content
+                            break
+                        except Exception as err:
+                            last_error = err
+                            continue
+                else:
+                    # فلترة نماذج النصوص وتجنب نماذج الحماية
+                    text_candidates = [m for m in all_model_ids if "guard" not in m.lower() and "whisper" not in m.lower() and "embed" not in m.lower()]
+                    if not text_candidates:
+                        text_candidates = all_model_ids
+                        
                     messages = [
                         {"role": "system", "content": "أنت خبير موسوعي وعالم ذكاء اصطناعي فائق الذكاء، أجب بعمق ودقة علمية عالية."},
                         {"role": "user", "content": user_question}
                     ]
-
-                chat_completion = client.chat.completions.create(
-                    messages=messages,
-                    model=model_to_use,
-                )
-                
-                response_text = chat_completion.choices[0].message.content
-                st.markdown("### 💡 الإجابة:")
-                st.markdown(response_text)
+                    
+                    # جرب نماذج النصوص واحد تلو الآخر حتى ينجح واحد تلقائياً
+                    for m_id in text_candidates:
+                        try:
+                            chat_completion = client.chat.completions.create(
+                                messages=messages,
+                                model=m_id,
+                            )
+                            response_text = chat_completion.choices[0].message.content
+                            break
+                        except Exception as err:
+                            last_error = err
+                            continue
+                            
+                if response_text:
+                    st.markdown("### 💡 الإجابة:")
+                    st.markdown(response_text)
+                else:
+                    st.error(f"عذراً، لم ينجح أي نموذج متاح في مفتاحك. الخطأ الأخير: {last_error}")
                 
         except Exception as e:
-            st.error(f"حدث خطأ: {e}")
+            st.error(f"حدث خطأ عام: {e}")
