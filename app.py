@@ -1,4 +1,3 @@
-
 import os
 import io
 import json
@@ -11,188 +10,163 @@ from openai import OpenAI
 import streamlit.components.v1 as components
 
 
-# =====================================================
-# 1. إعداد الصفحة
-# =====================================================
+# =========================
+# الإعدادات
+# =========================
 
 st.set_page_config(
-    page_title="Nova AI",
-    page_icon="🧠",
-    layout="wide",
+    page_title="مساعد الذكاء الاصطناعي",
+    page_icon="🤖",
+    layout="wide"
 )
 
-# =====================================================
-# 2. تنسيق الواجهة
-# =====================================================
+MAX_TOKENS = 512
+
+SYSTEM_PROMPT = """
+أنت مساعد ذكاء اصطناعي عربي دقيق ومباشر.
+
+القواعد:
+- لا تخترع معلومات أو مصادر.
+- إذا لم تكن متأكدًا، وضّح درجة عدم اليقين.
+- فرّق بين الحقائق والفرضيات.
+- أجب عن السؤال مباشرة دون حشو.
+- عند وجود خطأ في السؤال، صححه باختصار.
+- استخدم العربية الواضحة، إلا إذا طلب المستخدم لغة أخرى.
+"""
+
+
+# =========================
+# التصميم
+# =========================
 
 st.markdown(
     """
     <style>
     .stApp {
-        background: #0e1117;
-        color: #f5f5f5;
+        background-color: #101114;
+        color: #ffffff;
     }
 
-    .block-container {
-        max-width: 1100px;
-        padding-top: 2rem;
-        padding-bottom: 3rem;
+    h1, h2, h3, p, label, span {
+        color: #ffffff;
     }
 
-    .nova-title {
-        font-size: 2.1rem;
-        font-weight: 800;
-        text-align: center;
-        margin-bottom: 0.2rem;
-    }
-
-    .nova-subtitle {
-        text-align: center;
-        color: #aeb6c2;
-        margin-bottom: 1.5rem;
-    }
-
-    div[data-testid="stTextArea"] textarea,
-    div[data-testid="stTextInput"] input {
+    .stTextArea textarea {
         background-color: #ffffff !important;
-        color: #111111 !important;
-        -webkit-text-fill-color: #111111 !important;
-        caret-color: #111111 !important;
-        border: 1px solid #cbd5e1 !important;
-        border-radius: 12px !important;
+        color: #000000 !important;
+        border-radius: 10px;
     }
 
-    div[data-testid="stTextArea"] textarea::placeholder,
-    div[data-testid="stTextInput"] input::placeholder {
-        color: #666666 !important;
-        -webkit-text-fill-color: #666666 !important;
-        opacity: 1 !important;
+    .stTextArea textarea::placeholder {
+        color: #555555 !important;
     }
 
-    div.stButton > button {
-        border-radius: 12px;
-        font-weight: 700;
-        min-height: 2.7rem;
+    .stButton button {
+        border-radius: 10px;
+        font-weight: bold;
     }
 
-    [data-testid="stSidebar"] {
-        background: #11151d;
+    [data-testid="stFileUploader"] {
+        color: #ffffff;
     }
 
+    [data-testid="stExpander"] {
+        border: 1px solid #444444;
+        border-radius: 10px;
+    }
     </style>
     """,
-    unsafe_allow_html=True,
+    unsafe_allow_html=True
 )
 
 
-# =====================================================
-# 3. تعليمات المساعد
-# =====================================================
+# =========================
+# مفاتيح API
+# =========================
 
-SYSTEM_PROMPT = """
-أنت Nova AI، مساعد علمي وتحليلي دقيق.
+def get_secret(name):
+    value = os.getenv(name)
 
-قواعد الإجابة:
-
-1. لا تختلق حقائق أو دراسات أو مصادر أو روابط.
-2. لا تدّعِ أنك بحثت في الإنترنت إذا لم تستخدم أداة بحث فعلية.
-3. فرّق بين الحقيقة المدعومة والفرضية والاستنتاج والتخمين.
-4. إذا لم تعرف الإجابة، قل إنك لا تعرف.
-5. تحقق من الأرقام والوحدات والحسابات قبل عرضها.
-6. لا تعتبر الارتباط الإحصائي دليلًا على السببية.
-7. لا تعمم نتائج دراسة واحدة على جميع الحالات.
-8. وضّح حدود الأدلة عندما تكون مهمة.
-9. فضّل الدراسات الأصلية والمصادر الرسمية الموثوقة.
-10. لا تخترع أسماء مؤلفين أو مجلات أو تواريخ نشر.
-11. إذا تعذر التحقق من مصدر، وضّح ذلك.
-12. لا تصف فرضية بأنها حقيقة محسومة دون أدلة كافية.
-13. عند تقييم معلومة، حدّد الأجزاء الصحيحة والخاطئة كلًّا على حدة.
-14. إذا كانت المعلومة حديثة، وضّح حدود معرفتك إن لم يتوفر بحث.
-15. عند تحليل الصور، صف ما يظهر فعلًا ولا تستنتج تفاصيل
-    لا تدعمها الصورة.
-16. لا تدّعِ أنك قرأت نصًا غير واضح في الصورة.
-17. عند وجود شك، اذكره بدل تقديم التخمين على أنه حقيقة.
-18. لا تبالغ في الثقة أو تستخدم ضمانات غير مبررة.
-19. كن مباشرًا وواضحًا، وتوسع عندما يحتاج السؤال ذلك.
-20. ضع المصادر في نهاية الإجابة إذا كانت متوفرة فعلًا.
-"""
-
-
-# =====================================================
-# 4. مفتاح API
-# =====================================================
-
-def get_api_key():
-    key = os.getenv("GROQ_API_KEY", "").strip()
-
-    if key:
-        return key
+    if value:
+        return value
 
     try:
-        return str(
-            st.secrets.get("GROQ_API_KEY", "")
-        ).strip()
+        return st.secrets.get(name, "")
     except Exception:
         return ""
 
 
-# =====================================================
-# 5. الاتصال بـ Groq
-# =====================================================
-
-def get_groq_client(api_key):
-    return Groq(api_key=api_key)
+GROQ_API_KEY = get_secret("GROQ_API_KEY")
+OPENAI_API_KEY = get_secret("OPENAI_API_KEY")
 
 
-def fetch_model_ids(client):
+if not GROQ_API_KEY:
+    st.error(
+        "لم يتم العثور على GROQ_API_KEY. "
+        "أضفه في Secrets داخل إعدادات التطبيق."
+    )
+    st.stop()
+
+
+groq_client = Groq(api_key=GROQ_API_KEY)
+
+
+# =========================
+# جلب النماذج
+# =========================
+
+@st.cache_data(ttl=300)
+def get_models(api_key):
     try:
+        client = Groq(api_key=api_key)
         result = client.models.list()
-        return sorted({
-            model.id
-            for model in result.data
-            if getattr(model, "id", None)
-        })
-    except Exception as exc:
-        st.warning(f"تعذر تحميل النماذج: {exc}")
+
+        return sorted([
+            model.id for model in result.data
+        ])
+
+    except Exception as e:
+        st.error(f"تعذر جلب النماذج: {e}")
         return []
 
 
-def choose_default_model(model_ids, keywords):
-    for keyword in keywords:
-        for model_id in model_ids:
-            if keyword.lower() in model_id.lower():
-                return model_id
-
-    return model_ids[0] if model_ids else ""
+models = get_models(GROQ_API_KEY)
 
 
-def model_is_vision(model_id):
-    name = model_id.lower()
+def model_is_vision(model_name):
+    name = model_name.lower()
 
     vision_keywords = [
         "vision",
-        "llava",
-        "pixtral",
-        "qwen-vl",
-        "maverick",
-        "scout",
+        "llama-4",
+        "llama-3.2-11b",
+        "llama-3.2-90b"
     ]
 
     return any(word in name for word in vision_keywords)
 
 
-# =====================================================
-# 6. تجهيز الصورة وتقليل حجم الطلب
-# =====================================================
+vision_models = [
+    model for model in models
+    if model_is_vision(model)
+]
 
-def image_to_data_url(uploaded_file, max_side=768):
-    """
-    تصغير الصورة وضغطها قبل إرسالها إلى النموذج.
-    يساعد ذلك على تقليل حجم الطلب، لكنه لا يضمن أن
-    النموذج يقبل الصور أو أن الطلب ضمن حدود الخدمة.
-    """
+text_models = [
+    model for model in models
+    if not model_is_vision(model)
+]
 
-    image = Image.open(uploaded_file).convert("RGB")
+if not text_models:
+    text_models = models
+
+
+# =========================
+# تحويل الصورة
+# =========================
+
+def image_to_data_url(image_file, max_side=768):
+    image = Image.open(image_file).convert("RGB")
+
     image.thumbnail((max_side, max_side))
 
     buffer = io.BytesIO()
@@ -201,21 +175,19 @@ def image_to_data_url(uploaded_file, max_side=768):
         buffer,
         format="JPEG",
         quality=60,
-        optimize=True,
+        optimize=True
     )
 
-    image_bytes = buffer.getvalue()
-
     encoded = base64.b64encode(
-        image_bytes
+        buffer.getvalue()
     ).decode("utf-8")
 
     return f"data:image/jpeg;base64,{encoded}"
 
 
-# =====================================================
-# 7. المحادثة النصية
-# =====================================================
+# =========================
+# المحادثة النصية
+# =========================
 
 def call_chat(client, model, user_text):
     response = client.chat.completions.create(
@@ -223,468 +195,201 @@ def call_chat(client, model, user_text):
         messages=[
             {
                 "role": "system",
-                "content": SYSTEM_PROMPT,
+                "content": SYSTEM_PROMPT
             },
             {
                 "role": "user",
-                "content": user_text,
-            },
+                "content": user_text
+            }
         ],
         temperature=0.2,
-        max_tokens=2500,
+        max_tokens=MAX_TOKENS
     )
 
-    return (
-        response.choices[0].message.content
-        or "لم يُرجع النموذج إجابة."
-    )
+    return response.choices[0].message.content
 
 
-# =====================================================
-# 8. تحليل الصور
-# =====================================================
+# =========================
+# تحليل الصور
+# =========================
 
-def analyze_image(client, model, user_text, image_data_url):
-    prompt = user_text.strip()
-
-    if not prompt:
-        prompt = (
-            "حلل الصورة واشرح ما يظهر فيها بدقة. "
-            "ميّز بين ما يمكن ملاحظته وما لا يمكن الجزم به."
-        )
+def analyze_image(client, model, user_text, image_file):
+    image_url = image_to_data_url(image_file)
 
     response = client.chat.completions.create(
         model=model,
         messages=[
             {
                 "role": "system",
-                "content": SYSTEM_PROMPT,
+                "content": SYSTEM_PROMPT
             },
             {
                 "role": "user",
                 "content": [
                     {
                         "type": "text",
-                        "text": prompt,
+                        "text": user_text or "حلل الصورة واشرح محتواها بدقة."
                     },
                     {
                         "type": "image_url",
                         "image_url": {
-                            "url": image_data_url,
-                        },
-                    },
-                ],
-            },
+                            "url": image_url
+                        }
+                    }
+                ]
+            }
         ],
         temperature=0.2,
-        max_tokens=2000,
+        max_tokens=MAX_TOKENS
     )
 
-    return (
-        response.choices[0].message.content
-        or "لم يُرجع النموذج إجابة."
-    )
+    return response.choices[0].message.content
 
 
-# =====================================================
-# 9. البحث على الويب
-# =====================================================
+# =========================
+# البحث عبر الويب
+# =========================
 
-def research_with_web(api_key, model, user_text):
-    """
-    يعتمد نجاح البحث على دعم واجهة Responses API وأداة
-    browser_search في الخدمة والنموذج المحددين.
-    """
-
-    client = OpenAI(
-        api_key=api_key,
-        base_url="https://api.groq.com/openai/v1",
-    )
-
-    response = client.responses.create(
-        model=model,
-        instructions=SYSTEM_PROMPT,
-        input=(
-            "تحقق من السؤال التالي باستخدام البحث على الويب. "
-            "لا تختلق مصادر، واذكر الروابط التي استخدمتها فعلًا.\n\n"
-            + user_text
-        ),
-        tools=[
-            {"type": "browser_search"}
-        ],
-    )
-
-    answer = getattr(response, "output_text", "") or ""
-
-    sources = []
+def research_with_web(question, model):
+    if not OPENAI_API_KEY:
+        return (
+            "البحث عبر الويب يحتاج إلى OPENAI_API_KEY "
+            "ومزود يدعم أداة البحث. يمكنك تعطيل خيار البحث "
+            "والمتابعة بالمحادثة العادية."
+        )
 
     try:
-        for item in response.output:
-            for content in getattr(item, "content", []) or []:
-                for annotation in (
-                    getattr(content, "annotations", []) or []
-                ):
-                    url = getattr(annotation, "url", None)
-                    title = getattr(annotation, "title", None)
+        client = OpenAI(
+            api_key=OPENAI_API_KEY
+        )
 
-                    if url and not any(
-                        source["url"] == url for source in sources
-                    ):
-                        sources.append({
-                            "title": title or url,
-                            "url": url,
-                        })
-    except Exception:
-        pass
+        response = client.responses.create(
+            model=model,
+            input=(
+                SYSTEM_PROMPT
+                + "\n\nأجب عن السؤال التالي مع التحقق من المعلومات:\n"
+                + question
+            ),
+            tools=[
+                {"type": "web_search"}
+            ]
+        )
 
-    if not answer.strip():
-        answer = "لم تُرجع أداة البحث نصًا."
+        return response.output_text
 
-    return answer, sources
+    except Exception as e:
+        return (
+            "تعذر تنفيذ البحث عبر الويب. "
+            "تحقق من دعم النموذج لأداة البحث وإعدادات API.\n\n"
+            f"تفاصيل الخطأ: {e}"
+        )
 
 
-# =====================================================
-# 10. زر نسخ الإجابة
-# =====================================================
+# =========================
+# واجهة التطبيق
+# =========================
 
-def render_copy_button(text_to_copy):
-    safe_text = json.dumps(
-        text_to_copy,
-        ensure_ascii=False,
+st.title("🤖 مساعد الذكاء الاصطناعي")
+st.caption("محادثة، تحليل صور، وإمكانية البحث عبر الويب")
+
+if not models:
+    st.error(
+        "لم أستطع جلب نماذج Groq. تحقق من مفتاح API."
     )
+    st.stop()
 
-    html = f"""
-    <button id="copy-answer"
-        style="
-            background:#263449;
-            color:white;
-            border:1px solid #52637a;
-            padding:9px 16px;
-            border-radius:10px;
-            cursor:pointer;
-            font-weight:700;
-        ">
-        📋 نسخ الإجابة
-    </button>
-
-    <script>
-    const answerText = {safe_text};
-
-    document.getElementById("copy-answer").onclick =
-        async function() {{
-            try {{
-                await navigator.clipboard.writeText(answerText);
-                this.innerText = "تم النسخ";
-            }} catch (error) {{
-                this.innerText = "تعذر النسخ من المتصفح";
-            }}
-        }};
-    </script>
-    """
-
-    components.html(html, height=48)
-
-
-# =====================================================
-# 11. عرض المصادر
-# =====================================================
-
-def show_sources(sources):
-    with st.expander("📚 المصادر والمراجع", expanded=False):
-        if not sources:
-            st.caption(
-                "لم تُستخرج روابط مصادر من الاستجابة. "
-                "هذا لا يعني أن الإجابة تحققت من مصادر."
-            )
-            return
-
-        for number, source in enumerate(sources, start=1):
-            title = source.get("title") or source["url"]
-            url = source["url"]
-
-            st.markdown(f"{number}. [{title}]({url})")
-
-
-# =====================================================
-# 12. حالة التطبيق
-# =====================================================
-
-if "nova_answer" not in st.session_state:
-    st.session_state.nova_answer = ""
-
-if "nova_sources" not in st.session_state:
-    st.session_state.nova_sources = []
-
-if "nova_error" not in st.session_state:
-    st.session_state.nova_error = ""
-
-
-# =====================================================
-# 13. عنوان التطبيق
-# =====================================================
-
-st.markdown(
-    '<div class="nova-title">🧠 Nova AI</div>',
-    unsafe_allow_html=True,
-)
-
-st.markdown(
-    '<div class="nova-subtitle">'
-    'مساعد للتحليل والتعلّم والتحقق من المعلومات'
-    '</div>',
-    unsafe_allow_html=True,
-)
-
-
-# =====================================================
-# 14. إعداد الاتصال والنماذج
-# =====================================================
-
-api_key = get_api_key()
-
-if not api_key:
-    st.warning(
-        "أضف GROQ_API_KEY في Streamlit Secrets "
-        "أو أدخل المفتاح أدناه."
-    )
-
-    api_key = st.text_input(
-        "مفتاح Groq API",
-        type="password",
-        placeholder="ألصق المفتاح هنا",
-    ).strip()
-
-
-client = None
-model_ids = []
-
-if api_key:
-    try:
-        client = get_groq_client(api_key)
-        model_ids = fetch_model_ids(client)
-    except Exception as exc:
-        st.error(f"تعذر الاتصال بـ Groq: {exc}")
-
-
-# =====================================================
-# 15. الإعدادات الجانبية
-# =====================================================
 
 with st.sidebar:
-    st.title("⚙️ الإعدادات")
+    st.header("⚙️ الإعدادات")
 
-    if model_ids:
-        default_text = choose_default_model(
-            model_ids,
-            ["llama", "qwen", "gpt-oss"],
+    selected_text_model = st.selectbox(
+        "نموذج المحادثة",
+        options=text_models
+    )
+
+    if vision_models:
+        selected_vision_model = st.selectbox(
+            "نموذج تحليل الصور",
+            options=vision_models
         )
-
-        text_model = st.selectbox(
-            "نموذج المحادثة",
-            model_ids,
-            index=(
-                model_ids.index(default_text)
-                if default_text in model_ids else 0
-            ),
-        )
-
-        vision_models = [
-            model for model in model_ids
-            if model_is_vision(model)
-        ]
-
-        vision_options = vision_models or model_ids
-
-        vision_model = st.selectbox(
-            "نموذج الصور",
-            vision_options,
-        )
-
-        search_model = st.selectbox(
-            "نموذج البحث",
-            model_ids,
-            index=(
-                model_ids.index(default_text)
-                if default_text in model_ids else 0
-            ),
-        )
-
     else:
-        text_model = ""
-        vision_model = ""
-        search_model = ""
+        selected_vision_model = None
+        st.warning(
+            "لم يُعثر على نموذج صور بالاعتماد على اسم النموذج. "
+            "قد تحتاج إلى اختيار نموذج يدعم الصور يدويًا."
+        )
 
-        st.info("تعذر تحميل النماذج. تحقق من مفتاح API.")
-
-    st.divider()
-
-    use_web_search = st.toggle(
-        "🔎 البحث على الويب",
-        value=False,
-        help=(
-            "قد لا تعمل أداة البحث إذا لم تدعمها "
-            "الواجهة المستخدمة."
-        ),
+    enable_web_search = st.toggle(
+        "تفعيل البحث عبر الويب",
+        value=False
     )
 
     st.caption(
-        "اختيار نموذج لا يضمن دعمه للصور أو البحث."
+        f"حد الإخراج الحالي: {MAX_TOKENS} توكن"
     )
 
 
-# =====================================================
-# 16. حقل السؤال وإرفاق الصورة
-# =====================================================
-
-st.subheader("💬 اكتب سؤالك")
-
-user_prompt = st.text_area(
-    "السؤال",
-    placeholder="اكتب سؤالك هنا...",
-    height=130,
-    label_visibility="collapsed",
-    key="nova_prompt",
+user_text = st.text_area(
+    "اكتب سؤالك",
+    placeholder="اسأل عن أي موضوع...",
+    height=140
 )
 
-upload_col, send_col = st.columns([4, 1])
+uploaded_image = st.file_uploader(
+    "أرفق صورة للتحليل (اختياري)",
+    type=["png", "jpg", "jpeg", "webp"]
+)
 
-with upload_col:
-    uploaded_image = st.file_uploader(
-        "📎 إرفاق صورة",
-        type=["png", "jpg", "jpeg", "webp"],
-        accept_multiple_files=False,
-    )
-
-with send_col:
-    st.markdown(
-        "<div style='height: 27px'></div>",
-        unsafe_allow_html=True,
-    )
-
-    send_clicked = st.button(
-        "إرسال ➤",
-        type="primary",
-        use_container_width=True,
-    )
-
-
-if uploaded_image is not None:
+if uploaded_image:
     st.image(
         uploaded_image,
         caption="الصورة المرفقة",
-        use_container_width=True,
+        use_container_width=True
     )
 
 
-# =====================================================
-# 17. معالجة الطلب
-# =====================================================
-
-if send_clicked:
-    st.session_state.nova_answer = ""
-    st.session_state.nova_sources = []
-    st.session_state.nova_error = ""
-
-    if not api_key:
-        st.session_state.nova_error = (
-            "أدخل مفتاح Groq API أولًا."
-        )
-
-    elif not user_prompt.strip() and uploaded_image is None:
-        st.session_state.nova_error = (
-            "اكتب سؤالًا أو أرفق صورة."
-        )
-
-    elif client is None:
-        st.session_state.nova_error = (
-            "تعذر الاتصال بالخدمة."
-        )
+if st.button("إرسال", type="primary", use_container_width=True):
+    if not user_text.strip() and not uploaded_image:
+        st.warning("اكتب سؤالًا أو أرفق صورة أولًا.")
 
     else:
         try:
-            with st.spinner("جاري معالجة طلبك..."):
+            with st.spinner("جارٍ تجهيز الإجابة..."):
 
-                if uploaded_image is not None:
-                    if not vision_model:
-                        raise ValueError(
-                            "لم يتم اختيار نموذج للصور."
+                if uploaded_image:
+                    if not selected_vision_model:
+                        st.error(
+                            "لا يوجد نموذج صور محدد. "
+                            "اختر نموذجًا يدعم الصور من الإعدادات."
                         )
-
-                    image_data_url = image_to_data_url(
-                        uploaded_image,
-                        max_side=768,
-                    )
+                        st.stop()
 
                     answer = analyze_image(
-                        client,
-                        vision_model,
-                        user_prompt,
-                        image_data_url,
+                        groq_client,
+                        selected_vision_model,
+                        user_text,
+                        uploaded_image
                     )
 
-                    sources = []
-
-                elif use_web_search:
-                    if not search_model:
-                        raise ValueError(
-                            "لم يتم اختيار نموذج للبحث."
-                        )
-
-                    answer, sources = research_with_web(
-                        api_key,
-                        search_model,
-                        user_prompt,
+                elif enable_web_search:
+                    answer = research_with_web(
+                        user_text,
+                        selected_text_model
                     )
 
                 else:
-                    if not text_model:
-                        raise ValueError(
-                            "لم يتم اختيار نموذج للمحادثة."
-                        )
-
                     answer = call_chat(
-                        client,
-                        text_model,
-                        user_prompt,
+                        groq_client,
+                        selected_text_model,
+                        user_text
                     )
 
-                    sources = []
+            st.subheader("الإجابة")
+            st.markdown(answer)
 
-                st.session_state.nova_answer = answer
-                st.session_state.nova_sources = sources
-
-        except Exception as exc:
-            st.session_state.nova_error = str(exc)
-
-
-# =====================================================
-# 18. عرض النتيجة
-# =====================================================
-
-if st.session_state.nova_error:
-    st.error(
-        "تعذر تنفيذ الطلب:\n\n"
-        + st.session_state.nova_error
-    )
-
-
-if st.session_state.nova_answer:
-    st.divider()
-    st.subheader("🧠 الإجابة")
-
-    st.markdown(st.session_state.nova_answer)
-
-    render_copy_button(
-        st.session_state.nova_answer
-    )
-
-    st.download_button(
-        "⬇️ تنزيل الإجابة",
-        data=st.session_state.nova_answer,
-        file_name="nova_answer.txt",
-        mime="text/plain",
-    )
-
-    show_sources(
-        st.session_state.nova_sources
-    )
+        except Exception as e:
+            st.error(f"حدث خطأ أثناء تنفيذ الطلب: {e}")
+            st.info(
+                "تحقق من النموذج المحدد، ومفتاح API، "
+                "وحدود النموذج المدعوم."
+            )
