@@ -31,8 +31,8 @@ if st.button("إرسال وتحليل 🚀"):
         try:
             genai.configure(api_key=MY_API_KEY)
             
-            # استدعاء النموذج بالطريقة المباشرة والآمنة
-            model = genai.GenerativeModel('gemini-1.5-flash-latest')
+            # استخدام اسم الموديل الصحيح والمعتمد رسمياً حالياً
+            model = genai.GenerativeModel('gemini-2.5-flash')
             
             prompt_text = (
                 "أنت خبير موسوعي وعالم ذكاء اصطناعي فائق الذكاء، ملم بجميع العلوم والمعارف البشرية. "
