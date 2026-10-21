@@ -56,30 +56,25 @@ if st.button("إرسال وتحليل 🚀"):
         try:
             genai.configure(api_key=MY_API_KEY)
             
-            system_instruction = (
-                "أنت خبير موسوعي وعالم ذكاء اصطناعي فائق الذكاء، ملم بجميع العلوم والمعارف البشرية. "
-                "أجب عن أي سؤال يطرحه المستخدم (أنس) بعمق، ودقة علمية عالية، ومعلومات دقيقة وغنية دون إجابات سطحيّة."
-            )
+            # استخدام أسلوب الاتصال المباشر والمدعوم للنماذج الحالية بدون مشاكل v1beta
+            model = genai.GenerativeModel('gemini-1.5-flash')
             
-            # استخدام موديل 1.5 فلاش لضمان عدم ظهور أخطاء النماذج القديمة وتجاوز المشكلة فوراً
-            model = genai.GenerativeModel(
-                model_name='gemini-1.5-flash',
-                system_instruction=system_instruction
+            # توجيهات النظام والرسالة معاً بطريقة آمنة
+            prompt_text = (
+                "أنت خبير موسوعي وعالم ذكاء اصطناعي فائق الذكاء، ملم بجميع العلوم والمعارف البشرية. "
+                "أجب عن السؤال التالي بعمق، ودقة علمية عالية، ومعلومات غنية دون إجابات سطحيّة:\n\n" + user_question
             )
             
             with st.spinner("جاري التفكير وصياغة الإجابة... 🧠"):
                 if uploaded_file is not None:
                     image = Image.open(uploaded_file)
-                    if user_question:
-                        response = model.generate_content([user_question, image])
-                    else:
-                        response = model.generate_content(["قم بتحليل هذه الصورة بدقة وتفصيل:", image])
+                    response = model.generate_content([prompt_text, image])
                 else:
                     if not user_question:
                         st.warning("الرجاء كتابة سؤال أو رفع صورة للبدء.")
                         st.stop()
                     else:
-                        response = model.generate_content(user_question)
+                        response = model.generate_content(prompt_text)
                         
                 st.markdown("### 💡 الإجابة:")
                 st.markdown(response.text)
