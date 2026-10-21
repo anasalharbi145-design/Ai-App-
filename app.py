@@ -37,7 +37,7 @@ if st.button("إرسال وتحليل صاروخي 🚀"):
                 st.stop()
             
             with st.spinner("جاري المعالجة بسرعة البرق... ⚡"):
-                # استخدام نموذج Llama 3 القوي والسريع جداً على Groq
+                # استخدام نموذج لاما المعتمد والسريع جداً على Groq
                 chat_completion = client.chat.completions.create(
                     messages=[
                         {
@@ -49,7 +49,7 @@ if st.button("إرسال وتحليل صاروخي 🚀"):
                             "content": user_question,
                         }
                     ],
-                    model="llama-3.3-70b-versatile",
+                    model="llama-3.1-8b-instant",
                 )
                 
                 response_text = chat_completion.choices[0].message.content
