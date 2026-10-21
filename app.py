@@ -1,13 +1,11 @@
 import os
 import io
-import json
 import base64
 
 import streamlit as st
 from PIL import Image
 from groq import Groq
 from openai import OpenAI
-import streamlit.components.v1 as components
 
 
 # =========================
@@ -22,16 +20,21 @@ st.set_page_config(
 
 MAX_TOKENS = 512
 
+# النموذجان المطلوبان
+VISION_MODEL_ID = "qwen/qwen3.8-27b"
+CHAT_MODEL_ID = "openai/gpt-oss-120b"
+
 SYSTEM_PROMPT = """
 أنت مساعد ذكاء اصطناعي عربي دقيق ومباشر.
 
 القواعد:
 - لا تخترع معلومات أو مصادر.
-- إذا لم تكن متأكدًا، وضّح درجة عدم اليقين.
+- إذا لم تكن متأكدًا، وضّح ذلك.
 - فرّق بين الحقائق والفرضيات.
-- أجب عن السؤال مباشرة دون حشو.
-- عند وجود خطأ في السؤال، صححه باختصار.
-- استخدم العربية الواضحة، إلا إذا طلب المستخدم لغة أخرى.
+- أجب مباشرة دون حشو.
+- صحح الأخطاء باختصار.
+- استخدم العربية الواضحة إلا إذا طُلبت لغة أخرى.
+- في المسائل العلمية والرياضية، تحقق من الإجابة قبل تقديمها.
 """
 
 
@@ -112,48 +115,42 @@ groq_client = Groq(api_key=GROQ_API_KEY)
 
 
 # =========================
-# جلب النماذج
+# جلب النماذج المتاحة
 # =========================
 
 @st.cache_data(ttl=300)
 def get_models(api_key):
-    try:
-        client = Groq(api_key=api_key)
-        result = client.models.list()
+    client = Groq(api_key=api_key)
+    result = client.models.list()
 
-        return sorted([
-            model.id for model in result.data
-        ])
-
-    except Exception as e:
-        st.error(f"تعذر جلب النماذج: {e}")
-        return []
+    return sorted([
+        model.id for model in result.data
+    ])
 
 
-models = get_models(GROQ_API_KEY)
+try:
+    models = get_models(GROQ_API_KEY)
+except Exception as e:
+    st.error(f"تعذر جلب نماذج Groq: {e}")
+    st.stop()
 
 
-def model_is_vision(model_name):
-    name = model_name.lower()
-
-    vision_keywords = [
-        "vision",
-        "llama-4",
-        "llama-3.2-11b",
-        "llama-3.2-90b"
-    ]
-
-    return any(word in name for word in vision_keywords)
+if not models:
+    st.error("لم تظهر نماذج متاحة في حساب Groq.")
+    st.stop()
 
 
-vision_models = [
-    model for model in models
-    if model_is_vision(model)
-]
+# =========================
+# تحديد النماذج
+# =========================
 
+chat_model_available = CHAT_MODEL_ID in models
+vision_model_available = VISION_MODEL_ID in models
+
+# استبعاد نموذج الصور من قائمة الدردشة عند توفره
 text_models = [
     model for model in models
-    if not model_is_vision(model)
+    if model != VISION_MODEL_ID
 ]
 
 if not text_models:
@@ -165,8 +162,9 @@ if not text_models:
 # =========================
 
 def image_to_data_url(image_file, max_side=768):
-    image = Image.open(image_file).convert("RGB")
+    image_file.seek(0)
 
+    image = Image.open(image_file).convert("RGB")
     image.thumbnail((max_side, max_side))
 
     buffer = io.BytesIO()
@@ -186,7 +184,7 @@ def image_to_data_url(image_file, max_side=768):
 
 
 # =========================
-# المحادثة النصية
+# الدردشة النصية
 # =========================
 
 def call_chat(client, model, user_text):
@@ -228,7 +226,10 @@ def analyze_image(client, model, user_text, image_file):
                 "content": [
                     {
                         "type": "text",
-                        "text": user_text or "حلل الصورة واشرح محتواها بدقة."
+                        "text": (
+                            user_text
+                            or "حلل الصورة واشرح محتواها بدقة."
+                        )
                     },
                     {
                         "type": "image_url",
@@ -254,20 +255,17 @@ def research_with_web(question, model):
     if not OPENAI_API_KEY:
         return (
             "البحث عبر الويب يحتاج إلى OPENAI_API_KEY "
-            "ومزود يدعم أداة البحث. يمكنك تعطيل خيار البحث "
-            "والمتابعة بالمحادثة العادية."
+            "وموديل يدعم أداة البحث."
         )
 
     try:
-        client = OpenAI(
-            api_key=OPENAI_API_KEY
-        )
+        client = OpenAI(api_key=OPENAI_API_KEY)
 
         response = client.responses.create(
             model=model,
             input=(
                 SYSTEM_PROMPT
-                + "\n\nأجب عن السؤال التالي مع التحقق من المعلومات:\n"
+                + "\n\nتحقق من المعلومات وأجب عن السؤال:\n"
                 + question
             ),
             tools=[
@@ -280,7 +278,7 @@ def research_with_web(question, model):
     except Exception as e:
         return (
             "تعذر تنفيذ البحث عبر الويب. "
-            "تحقق من دعم النموذج لأداة البحث وإعدادات API.\n\n"
+            "تحقق من إعدادات API ودعم أداة البحث.\n\n"
             f"تفاصيل الخطأ: {e}"
         )
 
@@ -290,33 +288,44 @@ def research_with_web(question, model):
 # =========================
 
 st.title("🤖 مساعد الذكاء الاصطناعي")
-st.caption("محادثة، تحليل صور، وإمكانية البحث عبر الويب")
-
-if not models:
-    st.error(
-        "لم أستطع جلب نماذج Groq. تحقق من مفتاح API."
-    )
-    st.stop()
-
+st.caption("دردشة ذكية وتحليل صور")
 
 with st.sidebar:
     st.header("⚙️ الإعدادات")
 
-    selected_text_model = st.selectbox(
-        "نموذج المحادثة",
-        options=text_models
-    )
+    # اختيار نموذج الدردشة
+    if chat_model_available:
+        default_chat_index = text_models.index(CHAT_MODEL_ID)
 
-    if vision_models:
+        selected_text_model = st.selectbox(
+            "نموذج الدردشة",
+            options=text_models,
+            index=default_chat_index
+        )
+    else:
+        st.warning(
+            f"النموذج {CHAT_MODEL_ID} غير موجود "
+            "في قائمة النماذج المتاحة لحسابك."
+        )
+
+        selected_text_model = st.selectbox(
+            "نموذج الدردشة البديل",
+            options=text_models
+        )
+
+    # اختيار نموذج الصور
+    if vision_model_available:
         selected_vision_model = st.selectbox(
             "نموذج تحليل الصور",
-            options=vision_models
+            options=[VISION_MODEL_ID],
+            index=0
         )
     else:
         selected_vision_model = None
-        st.warning(
-            "لم يُعثر على نموذج صور بالاعتماد على اسم النموذج. "
-            "قد تحتاج إلى اختيار نموذج يدعم الصور يدويًا."
+
+        st.error(
+            f"النموذج {VISION_MODEL_ID} غير ظاهر "
+            "في قائمة حسابك. تحقق من النماذج المتاحة في Groq."
         )
 
     enable_web_search = st.toggle(
@@ -324,9 +333,7 @@ with st.sidebar:
         value=False
     )
 
-    st.caption(
-        f"حد الإخراج الحالي: {MAX_TOKENS} توكن"
-    )
+    st.caption(f"حد الإخراج: {MAX_TOKENS} توكن")
 
 
 user_text = st.text_area(
@@ -336,7 +343,7 @@ user_text = st.text_area(
 )
 
 uploaded_image = st.file_uploader(
-    "أرفق صورة للتحليل (اختياري)",
+    "أرفق صورة للتحليل",
     type=["png", "jpg", "jpeg", "webp"]
 )
 
@@ -348,7 +355,11 @@ if uploaded_image:
     )
 
 
-if st.button("إرسال", type="primary", use_container_width=True):
+if st.button(
+    "إرسال",
+    type="primary",
+    use_container_width=True
+):
     if not user_text.strip() and not uploaded_image:
         st.warning("اكتب سؤالًا أو أرفق صورة أولًا.")
 
@@ -357,10 +368,10 @@ if st.button("إرسال", type="primary", use_container_width=True):
             with st.spinner("جارٍ تجهيز الإجابة..."):
 
                 if uploaded_image:
-                    if not selected_vision_model:
+                    if not vision_model_available:
                         st.error(
-                            "لا يوجد نموذج صور محدد. "
-                            "اختر نموذجًا يدعم الصور من الإعدادات."
+                            "نموذج الصور غير متاح في قائمة حسابك، "
+                            "ولذلك لم يُرسل الطلب."
                         )
                         st.stop()
 
@@ -388,8 +399,8 @@ if st.button("إرسال", type="primary", use_container_width=True):
             st.markdown(answer)
 
         except Exception as e:
-            st.error(f"حدث خطأ أثناء تنفيذ الطلب: {e}")
+            st.error(f"حدث خطأ: {e}")
             st.info(
-                "تحقق من النموذج المحدد، ومفتاح API، "
-                "وحدود النموذج المدعوم."
+                "قد يكون النموذج غير متاح لحسابك، "
+                "أو أن الطلب تجاوز حدود الاستخدام."
             )
