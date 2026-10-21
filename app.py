@@ -17,13 +17,13 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.title("⚡ الذكاء الموسوعي الخارق (Groq Engine)")
-st.caption("مرحباً بك يا أنس، السرعة القصوى والأداء الفائق.")
+st.caption("مرحباً بك يا أنس، الأداء السريع والدقيق.")
 
 GROQ_API_KEY = st.secrets.get("GROQ_API_KEY", "")
 
 user_question = st.text_area("اطرح سؤالك أو معضلتك هنا:", placeholder="اكتب ما تبحث عنه...")
 
-if st.button("إرسال وتحليل صاروخي 🚀"):
+if st.button("إرسال وتحليل 🚀"):
     if not GROQ_API_KEY:
         st.error("لم يتم العثور على مفتاح Groq في إعدادات Secrets في Streamlit!")
     else:
@@ -34,38 +34,25 @@ if st.button("إرسال وتحليل صاروخي 🚀"):
                 st.warning("الرجاء كتابة سؤال للبدء.")
                 st.stop()
             
-            with st.spinner("جاري جلب النماذج المتاحة والمعالجة بسرعة البرق... ⚡"):
-                # جلب قائمة النماذج الفعالة حالياً واستبعاد نماذج الحماية والتصنيف
-                all_models = client.models.list()
-                valid_models = [
-                    m.id for m in all_models.data 
-                    if "guard" not in m.id.lower() and "whisper" not in m.id.lower()
-                ]
-                
-                if not valid_models:
-                    st.error("لم يتم العثور على نماذج محادثة نشطة في الحساب.")
-                    st.stop()
-                
-                # استخدام أول نموذج محادثة شغال ومتاح
-                active_model = valid_models[0]
-                
+            with st.spinner("جاري المعالجة... ⚡"):
                 chat_completion = client.chat.completions.create(
                     messages=[
                         {
                             "role": "system",
-                            "content": "أنت خبير موسوعي وعالم ذكاء اصطناعي فائق الذكاء، ملم بجميع العلوم والمعارف. أجب بعمق ودقة علمية عالية."
+                            "content": "أنت خبير موسوعي وعالم ذكاء اصطناعي دقيق، تقدم معلومات موثوقة بعيداً عن التهويل أو الخلط غير العلمي."
                         },
                         {
                             "role": "user",
                             "content": user_question,
                         }
                     ],
-                    model=active_model,
+                    model="llama-3.3-70b-versatile",
                 )
                 
                 response_text = chat_completion.choices[0].message.content
+                
                 st.markdown("### 💡 الإجابة:")
                 st.markdown(response_text)
                 
         except Exception as e:
-            st.error(f"حدث خطأ: {e}")
+            st.error(f"حدث خطأ التقنية: {e}")
