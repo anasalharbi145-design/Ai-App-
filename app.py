@@ -4,6 +4,10 @@ import io
 import json
 import base64
 import re
+import urllib.request
+import urllib.parse
+import difflib
+from datetime import datetime
 
 import streamlit as st
 import streamlit.components.v1 as components
@@ -12,7 +16,7 @@ from groq import Groq
 
 
 # =========================================================
-# 1. إعدادات التطبيق
+# 1. الإعدادات
 # =========================================================
 
 st.set_page_config(
@@ -50,140 +54,86 @@ CODE_MODELS = set(TOOL_MODEL_PREFERENCES)
 
 
 # =========================================================
-# 2. تعليمات الذكاء الاصطناعي
+# 2. تعليمات المساعد
 # =========================================================
 
 SYSTEM_PROMPT = """
-أنت مساعد ذكاء اصطناعي عام، دقيق، عملي، ومتعدد المجالات.
-مهمتك مساعدة المستخدم على الفهم وحل المشكلات، لا مجرد إنتاج
-إجابة مقنعة لغويًا.
+أنت مساعد ذكاء اصطناعي عام متعدد المجالات.
 
-المجالات:
-العلوم، الرياضيات، البرمجة، البحث، التعليم، الكتابة، الترجمة،
-تحليل الصور، تحليل البيانات، التخطيط، والتفكير النقدي.
+الأهداف:
+الإجابة بدقة، وحل المشكلات، وشرح المعلومات، والبحث والتحقق،
+والتعليم والبرمجة وتحليل الصور والبيانات.
 
-أولًا: الدقة والنزاهة
-- لا تختلق حقائق أو أرقامًا أو دراسات أو أسماء أشخاص أو مراجع.
-- لا تدّع أنك بحثت أو اختبرت كودًا أو نفذت عملية لم تنفذها.
-- ميّز بين المعلومة المؤكدة والاستنتاج والفرضية والتوقع والرأي.
-- إذا كانت الأدلة غير كافية، قل ذلك بوضوح.
-- إذا كان السؤال يعتمد على معلومات حديثة، فابحث إن توفرت الأداة.
-- إذا لم تستخدم البحث، فلا توحِ بأنك تحققت من المعلومات حديثًا.
-- لا تعتبر تكرار المعلومة في مواقع كثيرة دليلًا مستقلًا.
-- لا تخلط بين الارتباط والسببية.
-- لا تعمم نتائج دراسة واحدة دون مبرر.
-- لا توافق المستخدم لمجرد إرضائه؛ صحح الأخطاء باحترام.
-- إذا اكتشفت خطأ في إجابتك السابقة، اعترف به وصححه.
-- لا تخلط بين عدم العثور على دليل وبين ثبوت أن الادعاء خاطئ.
+قواعد الدقة:
+1. لا تختلق حقائق أو أرقامًا أو دراسات أو مؤلفين أو روابط.
+2. لا تدّع أنك استخدمت أداة لم تستخدمها فعلًا.
+3. ميّز بين الحقيقة والاستنتاج والفرضية والرأي.
+4. إذا لم تعرف، فقل ذلك بوضوح.
+5. لا تخلط بين عدم العثور على دليل وبين إثبات خطأ الادعاء.
+6. لا تعمم نتائج دراسة واحدة دون مبرر.
+7. لا تخلط بين الارتباط والسببية.
+8. لا توافق المستخدم لمجرد إرضائه.
+9. صحح أخطاءك السابقة إذا اكتشفتها.
+10. راجع الأرقام والوحدات والتواريخ والأسماء.
 
-ثانيًا: البحث والمصادر
-عند استخدام البحث:
+قواعد المصادر:
+- اسم الدراسة أو وجود الرابط لا يثبت صحة الادعاء.
+- لا تختلق عنوانًا أو اسم مؤلف أو سنة أو اسم مجلة.
+- فرّق بين العثور على المصدر وفحص محتواه.
+- فرّق بين صحة المعلومة وصحة المرجع الذي استُشهد به.
+- لا تقل إن مرجعًا متحقق منه إلا إذا فُحصت بياناته فعلًا.
+- لا تقل إن دراسة تدعم ادعاءً إلا إذا توفر دليل على ذلك.
+- إذا تعذر التحقق، صرّح بذلك.
+- عند وجود تعارض بين الأدلة، اذكره.
 - فضّل المصادر الأصلية والرسمية والدراسات المحكمة.
-- ابحث عن الدليل الذي يدعم الادعاء المحدد، لا العنوان فقط.
-- ميّز بين صفحة ظهرت في النتائج وصفحة فُحص محتواها.
-- لا تخترع روابط أو عناوين دراسات أو أسماء مؤلفين.
-- احتفظ بالقيود والتعارضات المهمة بين المصادر.
-- اذكر تاريخ المعلومة إذا كان مهمًا.
-- لا تقل إن كل ادعاء تحقق بالكامل إذا لم يحدث ذلك.
-- إذا لم تتوفر مصادر كافية، قل: لم أتمكن من التحقق الكافي.
-- لا تعتبر وجود رابط وحده إثباتًا لصحة المعلومة.
+- لا تعرض سلسلة التفكير الداخلية؛ قدم أسبابًا ونتائج قابلة للفحص.
 
-ثالثًا: التفكير وحل المشكلات
-- حدد المطلوب والقيود قبل الحل.
-- استخدم الطريقة المناسبة للمسألة بدل تطبيق قالب واحد على كل شيء.
-- افحص الافتراضات والوحدات والأرقام والحالات الاستثنائية.
-- قارن بين التفسيرات المعقولة عندما يكون السؤال ملتبسًا.
-- أعط النتيجة أولًا، ثم الأسباب والأدلة المفيدة.
-- لا تعرض سلسلة التفكير الداخلية؛ قدم ملخصًا واضحًا للأسباب
-  والخطوات التي يستطيع المستخدم التحقق منها.
-- لا تتظاهر باليقين حين تكون المسألة غير محسومة.
+في تدقيق الحقائق، استخدم الأحكام:
+صحيح، صحيح جزئيًا، خاطئ، غير مدعوم، أو غير محسوم.
 
-رابعًا: الرياضيات والعلوم
-- اشرح الرموز والقواعد عند حاجة المستخدم إليها.
-- تحقق من الناتج والوحدات والإشارات والافتراضات.
-- استخدم أداة تشغيل الكود المتاحة عند فائدتها.
-- ميّز بين القياس التجريبي والتفسير النظري والفرضية.
-- عند تدقيق الحقائق، صنفها إلى:
-  صحيح، صحيح جزئيًا، خاطئ، غير مدعوم، أو غير محسوم.
-- لا تستنتج دقة رقم من عدد منازل عشرية فقط.
+في البرمجة:
+- لا تدّع تشغيل الكود دون تشغيله.
+- حافظ على الوظائف الموجودة عند تعديل مشروع.
+- لا تكشف مفاتيح API.
+- وضّح ما لم يتم اختباره.
 
-خامسًا: البرمجة
-- حافظ على الوظائف الموجودة عندما تعدل مشروعًا قائمًا.
-- افحص الاستيرادات وتوافق المكتبات وأنواع البيانات.
-- وضح المتطلبات والإعدادات اللازمة للتشغيل.
-- لا تدّع اختبار الكود إلا إذا شُغّل فعلًا.
-- لا تكشف مفاتيح API أو كلمات المرور.
-- لا تضع الأسرار في الواجهة الأمامية أو في ملفات عامة.
-- اذكر بوضوح أي جزء لم يتم اختباره.
-
-سادسًا: الصور والبيانات
-- اعتمد على ما يظهر فعلًا في الصورة أو البيانات.
-- لا تخترع تفاصيل غير واضحة.
-- اشرح القيود إذا كانت الدقة أو جودة المدخلات ضعيفة.
-- لا تستنتج بيانات شخصية حساسة من صورة دون مبرر.
-
-سابعًا: أسلوب التواصل
-- استخدم لغة المستخدم.
-- كن مباشرًا، واضحًا، ومنظمًا.
-- لا تكثر من المقدمات والمديح والحشو.
-- الأسئلة البسيطة تستحق إجابات قصيرة.
-- الأسئلة المعقدة تستحق شرحًا كافيًا دون تكرار.
-- اسأل سؤالًا توضيحيًا واحدًا إذا كان الغموض يمنع الحل.
-- لا تعد المستخدم بنتيجة لا تستطيع ضمانها.
-
-قبل إرسال الإجابة:
-راجع الأرقام والتناقضات والاستنتاجات والمصادر والقيود.
-صحح الأخطاء الواضحة، وصرّح بما بقي غير مؤكد.
+الأسلوب:
+- أجب بلغة المستخدم.
+- كن مباشرًا دون حشو.
+- ابدأ بالنتيجة ثم الأدلة المهمة.
+- صرّح بعدم اليقين بدل اختراع إجابة.
 """
-
 
 RESEARCH_PROMPT = """
 وضع البحث والتحقق:
-استخدم أداة البحث المتاحة في هذا الطلب.
-ابحث عن معلومات تدعم الادعاءات الأساسية بشكل مباشر.
-فضّل المصادر الأصلية والرسمية والأبحاث العلمية.
-اعرض الروابط الفعلية التي توفرها نتائج البحث عندما تتوفر.
-اشرح ما الذي يدعمه كل مصدر، وما الذي لا يدعمه.
-لا تختلق اقتباسات أو روابط أو بيانات ببليوغرافية.
-إذا لم تتمكن من التحقق من محتوى مصدر، فصرّح بذلك.
-إذا تعارضت المصادر، وضّح التعارض ولا تخفِه.
-إذا لم تكف الأدلة، صنّف الادعاء بأنه غير متحقق.
-لا تدّع أن وجود المصادر يثبت صحة كل جملة.
-
-عند تدقيق عدة ادعاءات، افحص كل ادعاء على حدة.
-نظّم النتيجة إلى:
-1. الحكم المختصر.
-2. الأدلة لكل ادعاء.
-3. القيود ومواطن عدم اليقين.
-4. المصادر والروابط المتاحة فعلًا.
+استخدم أداة البحث المتاحة إن كانت مدعومة.
+افحص الادعاءات الأساسية كلًا على حدة.
+فضّل المصادر الأصلية والدراسات المحكمة.
+اعرض الروابط الفعلية التي توفرها الأداة.
+لا تختلق أسماء دراسات أو مؤلفين أو روابط.
+لا تعتبر وجود الرابط دليلًا على صحة الادعاء.
+إذا لم تفحص محتوى المصدر، فصرّح بذلك.
+إذا لم تكف الأدلة، فقل إن الادعاء غير متحقق.
+افصل بين صحة الفكرة وصحة تفاصيل المرجع.
 """
 
-
 MODES = {
-    "متوازن": """
-أجب بأفضل توازن بين الدقة والوضوح والاختصار.
-ابدأ بالإجابة المباشرة ثم أضف التفاصيل الضرورية.
-""",
+    "متوازن": "أجب بوضوح ودقة وباختصار مناسب.",
     "تحليل عميق": """
-حلل المشكلة بعناية.
-حدد الافتراضات والقيود والبدائل والتفسيرات المحتملة.
-افحص الاتساق والأرقام والأدلة قبل عرض النتيجة.
-قدم ملخصًا للأسباب المهمة دون عرض سلسلة التفكير الداخلية.
-لا تطل إذا كانت المسألة بسيطة.
+حلل المشكلة بعناية. افحص الافتراضات والبدائل والتناقضات
+والقيود. اعرض النتائج والأسباب المهمة دون عرض سلسلة التفكير
+الداخلية. لا تطل إذا كانت المسألة بسيطة.
 """,
     "بحث وتحقق": RESEARCH_PROMPT,
     "معلّم خطوة بخطوة": """
-تصرف كمعلم صبور.
-اشرح الفكرة من الأساس إلى التطبيق.
-قسّم المسائل الصعبة إلى خطوات واضحة، واستخدم مثالًا عند فائدته.
-لا تفترض أن المستخدم يعرف المصطلحات المتقدمة.
-في نهاية الشرح، قدم سؤالًا تدريبيًا قصيرًا إذا كان مناسبًا.
+اشرح الفكرة من الأساس إلى التطبيق. استخدم خطوات واضحة
+وأمثلة عند الحاجة. لا تفترض أن المستخدم يعرف المصطلحات.
 """,
 }
 
 
 # =========================================================
-# 3. تنسيق الواجهة
+# 3. تصميم الواجهة
 # =========================================================
 
 st.markdown(
@@ -195,7 +145,7 @@ st.markdown(
     }
 
     [data-testid="stHeader"] {
-        background: rgba(16, 17, 20, 0.96);
+        background: rgba(16,17,20,0.96);
     }
 
     [data-testid="stMainBlockContainer"] {
@@ -207,16 +157,13 @@ st.markdown(
         color: #f5f5f5;
     }
 
-    .stTextArea textarea {
+    .stTextArea textarea,
+    .stTextInput input {
         background: #202126 !important;
         color: #ffffff !important;
         border: 1px solid #45464d !important;
-        border-radius: 14px !important;
+        border-radius: 12px !important;
         font-size: 16px !important;
-    }
-
-    .stTextArea textarea::placeholder {
-        color: #b6b6bd !important;
     }
 
     .stButton button,
@@ -252,10 +199,6 @@ st.markdown(
         h1 {
             font-size: 1.6rem !important;
         }
-
-        [data-testid="stChatMessage"] {
-            padding: 0.6rem;
-        }
     }
     </style>
     """,
@@ -264,7 +207,7 @@ st.markdown(
 
 
 # =========================================================
-# 4. الاتصال الآمن بـ Groq
+# 4. Groq
 # =========================================================
 
 def get_secret(name):
@@ -290,10 +233,6 @@ if not GROQ_API_KEY:
 client = Groq(api_key=GROQ_API_KEY)
 
 
-# =========================================================
-# 5. اكتشاف النماذج المتاحة
-# =========================================================
-
 @st.cache_data(ttl=300, show_spinner=False)
 def get_available_models():
     result = client.models.list()
@@ -304,7 +243,7 @@ try:
     available_models = get_available_models()
 except Exception:
     st.error(
-        "تعذر جلب النماذج من Groq. تحقق من مفتاح API "
+        "تعذر جلب النماذج من Groq. تحقق من المفتاح "
         "والاتصال وحالة حسابك."
     )
     st.stop()
@@ -316,34 +255,29 @@ def available_preferences(preferences):
 
 chat_options = available_preferences(CHAT_PREFERENCES)
 vision_options = available_preferences(VISION_PREFERENCES)
-tool_model_options = available_preferences(TOOL_MODEL_PREFERENCES)
+tool_options = available_preferences(TOOL_MODEL_PREFERENCES)
 
-search_options = [
-    m for m in tool_model_options if m in SEARCH_MODELS
-]
-code_options = [
-    m for m in tool_model_options if m in CODE_MODELS
-]
+search_options = [m for m in tool_options if m in SEARCH_MODELS]
+code_options = [m for m in tool_options if m in CODE_MODELS]
 
 if not chat_options:
     st.error(
-        "لم يظهر أي نموذج دردشة من قائمة الاختيارات. "
-        "راجع النماذج المتاحة في حساب Groq وحدّث قائمة "
-        "CHAT_PREFERENCES داخل الملف عند الحاجة."
+        "لم يظهر نموذج دردشة من قائمة الاختيارات. "
+        "راجع النماذج المتاحة في حساب Groq."
     )
     st.stop()
 
 
 # =========================================================
-# 6. حالة الجلسة
+# 5. حالة الجلسة
 # =========================================================
 
 DEFAULTS = {
     "messages": [],
     "last_sources": [],
+    "last_model_used": "",
     "selected_chat_model": chat_options[0],
     "selected_mode": "متوازن",
-    "last_model_used": "",
 }
 
 for key, value in DEFAULTS.items():
@@ -377,17 +311,15 @@ def build_history():
     return history
 
 
-def build_system_prompt():
-    mode = st.session_state.selected_mode
-    mode_prompt = MODES.get(mode, MODES["متوازن"])
-
-    return SYSTEM_PROMPT + "\n\n" + mode_prompt
-
-
 def make_messages(user_text, include_user=True):
+    mode_prompt = MODES.get(
+        st.session_state.selected_mode,
+        MODES["متوازن"],
+    )
+
     messages = [{
         "role": "system",
-        "content": build_system_prompt(),
+        "content": SYSTEM_PROMPT + "\n\n" + mode_prompt,
     }]
 
     messages.extend(build_history())
@@ -402,7 +334,222 @@ def make_messages(user_text, include_user=True):
 
 
 # =========================================================
-# 7. أدوات مساعدة
+# 6. التحقق المستقل من المراجع عبر Crossref
+# =========================================================
+
+def http_json(url):
+    """
+    طلب HTTP باستخدام مكتبات Python القياسية.
+    لا يحتاج إلى مفتاح API.
+    """
+    request = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": "SmartAssistantReferenceChecker/1.0",
+            "Accept": "application/json",
+        },
+    )
+
+    with urllib.request.urlopen(request, timeout=15) as response:
+        raw = response.read().decode("utf-8")
+
+    return json.loads(raw)
+
+
+def normalize_text(value):
+    value = str(value or "").lower()
+    value = re.sub(r"[^a-z0-9]+", " ", value)
+    return " ".join(value.split())
+
+
+def crossref_record(record):
+    titles = record.get("title") or []
+    authors = record.get("author") or []
+    container = record.get("container-title") or []
+    published = (
+        record.get("published-print")
+        or record.get("published-online")
+        or record.get("issued")
+        or {}
+    )
+
+    date_parts = (
+        published.get("date-parts", [[None]])[0]
+        if isinstance(published, dict)
+        else [None]
+    )
+
+    year = date_parts[0] if date_parts else None
+
+    author_names = []
+    for author in authors:
+        given = author.get("given", "")
+        family = author.get("family", "")
+        name = " ".join(x for x in [given, family] if x)
+        if name:
+            author_names.append(name)
+
+    doi = record.get("DOI", "")
+    url = (
+        "https://doi.org/" + doi
+        if doi
+        else record.get("URL", "")
+    )
+
+    return {
+        "title": titles[0] if titles else "(لا يوجد عنوان مسجل)",
+        "authors": author_names,
+        "year": year,
+        "journal": container[0] if container else "(غير متوفر)",
+        "doi": doi,
+        "url": url,
+        "type": record.get("type", ""),
+    }
+
+
+def get_doi(text):
+    text = text.strip()
+
+    match = re.search(
+        r"(?:https?://(?:dx\.)?doi\.org/|doi:\s*)"
+        r"(10\.\d{4,9}/[^\s\"<>]+)",
+        text,
+        flags=re.I,
+    )
+
+    if not match and re.fullmatch(
+        r"10\.\d{4,9}/[^\s]+",
+        text,
+        flags=re.I,
+    ):
+        return text
+
+    if match:
+        return match.group(1).rstrip(".,;)]}")
+
+    return None
+
+
+def verify_reference(query):
+    """
+    يتحقق من وجود سجل مطابق في Crossref.
+    لا يتحقق تلقائيًا من أن الدراسة تدعم الادعاء العلمي.
+    """
+    query = query.strip()
+
+    if not query:
+        raise ValueError("اكتب عنوان الدراسة أو DOI أو رابط DOI.")
+
+    doi = get_doi(query)
+
+    if doi:
+        encoded_doi = urllib.parse.quote(doi, safe="/")
+        url = "https://api.crossref.org/works/" + encoded_doi
+        data = http_json(url)
+
+        record = data.get("message")
+        if not isinstance(record, dict):
+            raise ValueError("لم يرجع Crossref سجلًا صالحًا.")
+
+        result = crossref_record(record)
+        result["match_score"] = 1.0
+        result["verification_type"] = "DOI"
+        return [result]
+
+    params = urllib.parse.urlencode({
+        "query.bibliographic": query,
+        "rows": 5,
+        "select": (
+            "DOI,title,author,published-print,published-online,"
+            "issued,container-title,URL,type"
+        ),
+    })
+
+    data = http_json(
+        "https://api.crossref.org/works?" + params
+    )
+
+    items = data.get("message", {}).get("items", [])
+    results = []
+
+    query_norm = normalize_text(query)
+
+    for item in items:
+        result = crossref_record(item)
+        title_norm = normalize_text(result["title"])
+
+        if title_norm and query_norm:
+            score = difflib.SequenceMatcher(
+                None,
+                query_norm,
+                title_norm,
+            ).ratio()
+        else:
+            score = 0.0
+
+        result["match_score"] = score
+        result["verification_type"] = "بحث عنوان/مرجع"
+        results.append(result)
+
+    return sorted(
+        results,
+        key=lambda x: x["match_score"],
+        reverse=True,
+    )
+
+
+def display_reference_result(result):
+    score = result["match_score"]
+
+    if result["verification_type"] == "DOI":
+        st.success("عُثر على سجل لهذا الـ DOI في Crossref.")
+    elif score >= 0.85:
+        st.success(
+            f"تطابق العنوان مرتفع نسبيًا: {score:.0%}. "
+            "تحقق من بقية البيانات."
+        )
+    elif score >= 0.60:
+        st.warning(
+            f"تطابق جزئي: {score:.0%}. "
+            "قد يكون هذا مرجعًا مختلفًا."
+        )
+    else:
+        st.warning(
+            f"التطابق ضعيف: {score:.0%}. "
+            "لا تعتبر هذا المرجع مطابقًا دون فحص يدوي."
+        )
+
+    st.markdown("**العنوان المسجل:** " + result["title"])
+
+    authors = result["authors"]
+    if authors:
+        shown_authors = ", ".join(authors[:8])
+        if len(authors) > 8:
+            shown_authors += " وآخرون"
+        st.write("**المؤلفون:** " + shown_authors)
+    else:
+        st.write("**المؤلفون:** غير متوفرين في السجل")
+
+    st.write("**السنة:** " + str(result["year"] or "غير متوفرة"))
+    st.write("**المجلة/المنشور:** " + result["journal"])
+    st.write("**نوع السجل:** " + str(result["type"] or "غير محدد"))
+
+    if result["doi"]:
+        st.write("**DOI:** " + result["doi"])
+
+    if result["url"]:
+        st.markdown(
+            f"[فتح سجل المصدر]({result['url']})"
+        )
+
+    st.caption(
+        "هذا الفحص يطابق بيانات السجل الببليوغرافي فقط؛ "
+        "لا يثبت أن المصدر يدعم الادعاء العلمي."
+    )
+
+
+# =========================================================
+# 7. أداة الاستجابة من Groq
 # =========================================================
 
 def completion_text(response):
@@ -412,11 +559,44 @@ def completion_text(response):
         return ""
 
 
+def call_completion(model, messages, tools=None, tool_choice=None):
+    kwargs = {
+        "model": model,
+        "messages": messages,
+        "temperature": 0.2,
+        "max_tokens": MAX_TOKENS,
+    }
+
+    if tools:
+        kwargs["tools"] = tools
+
+    if tool_choice:
+        kwargs["tool_choice"] = tool_choice
+
+    return client.chat.completions.create(**kwargs)
+
+
+def call_chat(user_text, enable_code=False):
+    model = st.session_state.selected_chat_model
+    tools = None
+
+    if enable_code:
+        if model in CODE_MODELS:
+            tools = [{"type": "code_interpreter"}]
+        elif code_options:
+            model = code_options[0]
+            tools = [{"type": "code_interpreter"}]
+
+    response = call_completion(
+        model=model,
+        messages=make_messages(user_text),
+        tools=tools,
+    )
+
+    return completion_text(response), model
+
+
 def extract_sources(response_data, answer=""):
-    """
-    يستخرج الروابط الفعلية الموجودة في نص الإجابة
-    أو بيانات الاستجابة. لا يثبت أن الرابط يدعم الادعاء.
-    """
     found = []
 
     def add(url, title=""):
@@ -428,13 +608,11 @@ def extract_sources(response_data, answer=""):
 
         url = url.strip().rstrip(".,;)]}")
 
-        if not re.match(r"^https?://", url, re.I):
-            return
-
-        found.append({
-            "title": str(title or url),
-            "url": url,
-        })
+        if re.match(r"^https?://", url, re.I):
+            found.append({
+                "title": str(title or url),
+                "url": url,
+            })
 
     def walk(value):
         if isinstance(value, dict):
@@ -457,12 +635,11 @@ def extract_sources(response_data, answer=""):
                 walk(child)
 
         elif isinstance(value, str):
-            urls = re.findall(
+            for url in re.findall(
                 r"https?://[^\s<>\"']+",
                 value,
                 flags=re.I,
-            )
-            for url in urls:
+            ):
                 add(url)
 
     walk(response_data)
@@ -479,93 +656,14 @@ def extract_sources(response_data, answer=""):
     return unique[:20]
 
 
-def image_to_data_url(image_file):
-    image_file.seek(0)
-    raw = image_file.read()
-
-    if len(raw) > IMAGE_MAX_BYTES:
-        raise ValueError(
-            "حجم الصورة يتجاوز 10 ميغابايت. "
-            "اختر صورة أصغر."
-        )
-
-    with Image.open(io.BytesIO(raw)) as original:
-        image = original.convert("RGB")
-        image.thumbnail((IMAGE_MAX_SIDE, IMAGE_MAX_SIDE))
-
-        buffer = io.BytesIO()
-        image.save(
-            buffer,
-            format="JPEG",
-            quality=82,
-            optimize=True,
-        )
-
-    encoded = base64.b64encode(
-        buffer.getvalue()
-    ).decode("utf-8")
-
-    return "data:image/jpeg;base64," + encoded
-
-
-def call_completion(model, messages, tools=None, tool_choice=None):
-    kwargs = {
-        "model": model,
-        "messages": messages,
-        "temperature": 0.2,
-        "max_completion_tokens": MAX_TOKENS,
-    }
-
-    if tools:
-        kwargs["tools"] = tools
-
-    if tool_choice:
-        kwargs["tool_choice"] = tool_choice
-
-    return client.chat.completions.create(**kwargs)
-
-
-# =========================================================
-# 8. الدردشة
-# =========================================================
-
-def call_chat(user_text, enable_code=False):
-    selected_model = st.session_state.selected_chat_model
-    model = selected_model
-    tools = None
-
-    if enable_code:
-        if selected_model in CODE_MODELS:
-            tools = [{"type": "code_interpreter"}]
-        elif code_options:
-            model = code_options[0]
-            tools = [{"type": "code_interpreter"}]
-
-    response = call_completion(
-        model=model,
-        messages=make_messages(user_text),
-        tools=tools,
-    )
-
-    return completion_text(response), model
-
-
-# =========================================================
-# 9. البحث في الإنترنت
-# =========================================================
-
 def research_with_web(user_text, enable_code=False):
     if not search_options:
         raise RuntimeError(
-            "البحث المدمج غير متاح ضمن النماذج الظاهرة في حسابك."
+            "البحث المدمج غير متاح ضمن النماذج التي ظهرت في حسابك."
         )
 
-    selected_model = st.session_state.selected_chat_model
-
-    if selected_model in SEARCH_MODELS:
-        model = selected_model
-    else:
-        model = search_options[0]
+    selected = st.session_state.selected_chat_model
+    model = selected if selected in SEARCH_MODELS else search_options[0]
 
     tools = [{"type": "browser_search"}]
 
@@ -592,33 +690,57 @@ def research_with_web(user_text, enable_code=False):
     sources = extract_sources(response_data, answer)
 
     if not answer.strip():
-        answer = "لم يرجع البحث إجابة نصية. حاول مرة أخرى."
+        answer = "لم يرجع النموذج إجابة نصية. حاول مرة أخرى."
 
     if not sources:
         answer += (
-            "\n\n**تنبيه توثيق:** لم أستطع استخراج روابط مباشرة "
-            "من الاستجابة. لا يعني ذلك أن الإجابة خاطئة، "
-            "لكنه يعني أن توثيقها بالروابط لم يكتمل."
+            "\n\n**تنبيه:** لم أستطع استخراج روابط مباشرة من "
+            "بيانات الاستجابة. لا يعني ذلك أن الإجابة خاطئة، "
+            "لكن التوثيق يحتاج إلى فحص إضافي."
         )
 
     return answer, sources, model
 
 
 # =========================================================
-# 10. تحليل الصور
+# 8. تحليل الصور
 # =========================================================
+
+def image_to_data_url(image_file):
+    image_file.seek(0)
+    raw = image_file.read()
+
+    if len(raw) > IMAGE_MAX_BYTES:
+        raise ValueError("حجم الصورة يتجاوز 10 ميغابايت.")
+
+    with Image.open(io.BytesIO(raw)) as original:
+        image = original.convert("RGB")
+        image.thumbnail((IMAGE_MAX_SIDE, IMAGE_MAX_SIDE))
+
+        buffer = io.BytesIO()
+        image.save(
+            buffer,
+            format="JPEG",
+            quality=82,
+            optimize=True,
+        )
+
+    encoded = base64.b64encode(
+        buffer.getvalue()
+    ).decode("utf-8")
+
+    return "data:image/jpeg;base64," + encoded
+
 
 def analyze_image(user_text, image_file):
     if not vision_options:
-        raise RuntimeError(
-            "لم يظهر نموذج رؤية مناسب ضمن النماذج المتاحة."
-        )
+        raise RuntimeError("لم يظهر نموذج صور مناسب في قائمة النماذج.")
 
     model = vision_options[0]
     image_url = image_to_data_url(image_file)
 
     prompt = user_text.strip() or (
-        "حلل الصورة بدقة، وافصل بين ما يظهر بوضوح "
+        "حلل الصورة بدقة. افصل بين ما يظهر بوضوح "
         "وما لا تستطيع التأكد منه."
     )
 
@@ -627,75 +749,54 @@ def analyze_image(user_text, image_file):
     messages.append({
         "role": "user",
         "content": [
-            {
-                "type": "text",
-                "text": prompt,
-            },
+            {"type": "text", "text": prompt},
             {
                 "type": "image_url",
-                "image_url": {
-                    "url": image_url,
-                },
+                "image_url": {"url": image_url},
             },
         ],
     })
 
-    response = call_completion(
-        model=model,
-        messages=messages,
-    )
-
+    response = call_completion(model, messages)
     return completion_text(response), model
 
 
 # =========================================================
-# 11. مراجعة الإجابة اختياريًا
+# 9. مراجعة الإجابة اختياريًا
 # =========================================================
 
 def review_answer(question, answer, model):
-    """
-    مراجعة إضافية اختيارية. ليست ضمانًا للصحة،
-    ولا تغني عن التحقق من المصادر الأصلية.
-    """
-    review_prompt = """
-راجع الإجابة التالية مراجعة نقدية.
-ابحث عن الأخطاء الواقعية والمنطقية والحسابية،
+    prompt = """
+راجع الإجابة بحثًا عن الأخطاء الواقعية والمنطقية والحسابية،
 والتناقضات والمبالغة والادعاءات غير المدعومة.
-إذا وجدت خطأ واضحًا، صحح الإجابة.
-إذا لم تستطع حسم ادعاء، وضّح عدم اليقين.
-لا تخترع مصادر أو نتائج بحث.
+صحح الأخطاء الواضحة، وصرّح بما لا تستطيع حسمه.
+لا تختلق مصادر أو نتائج بحث.
 لا تعرض سلسلة التفكير الداخلية.
-أعد الإجابة النهائية المصححة فقط، مع الاحتفاظ
-بالمعلومات المفيدة وعدم إطالة النص دون حاجة.
+أعد الإجابة النهائية المصححة فقط.
 """
 
     messages = [
         {
             "role": "system",
-            "content": SYSTEM_PROMPT + "\n\n" + review_prompt,
+            "content": SYSTEM_PROMPT + "\n\n" + prompt,
         },
         {
             "role": "user",
             "content": (
-                "السؤال الأصلي:\n"
-                + question
-                + "\n\nالإجابة المراد مراجعتها:\n"
-                + answer
+                "السؤال:\n" + question
+                + "\n\nالإجابة المراد مراجعتها:\n" + answer
             ),
         },
     ]
 
-    response = call_completion(
-        model=model,
-        messages=messages,
-    )
-
+    response = call_completion(model, messages)
     revised = completion_text(response)
+
     return revised.strip() if revised.strip() else answer
 
 
 # =========================================================
-# 12. زر نسخ الإجابة
+# 10. زر النسخ
 # =========================================================
 
 def render_copy_button(text, button_id):
@@ -704,7 +805,11 @@ def render_copy_button(text, button_id):
         ensure_ascii=False,
     ).replace("</", "<\\/")
 
-    safe_id = re.sub(r"[^a-zA-Z0-9_-]", "_", str(button_id))
+    safe_id = re.sub(
+        r"[^a-zA-Z0-9_-]",
+        "_",
+        str(button_id),
+    )
 
     components.html(
         f"""
@@ -737,9 +842,7 @@ def render_copy_button(text, button_id):
           </style>
         </head>
         <body>
-          <button id="copy-{safe_id}" type="button">
-            📋 نسخ الإجابة
-          </button>
+          <button id="copy-{safe_id}" type="button">📋 نسخ الإجابة</button>
           <span id="status-{safe_id}" role="status"></span>
           <script>
             const copyText = {safe_text};
@@ -747,37 +850,11 @@ def render_copy_button(text, button_id):
             const status = document.getElementById("status-{safe_id}");
 
             button.addEventListener("click", async () => {{
-              status.textContent = "";
-
               try {{
-                if (!navigator.clipboard || !window.isSecureContext) {{
-                  throw new Error("Clipboard unavailable");
-                }}
                 await navigator.clipboard.writeText(copyText);
                 status.textContent = "تم النسخ ✓";
               }} catch (error) {{
-                try {{
-                  const area = document.createElement("textarea");
-                  area.value = copyText;
-                  area.setAttribute("readonly", "");
-                  area.style.position = "fixed";
-                  area.style.left = "-9999px";
-                  document.body.appendChild(area);
-                  area.focus();
-                  area.select();
-                  area.setSelectionRange(0, area.value.length);
-
-                  const success = document.execCommand("copy");
-                  document.body.removeChild(area);
-
-                  if (!success) {{
-                    throw new Error("Copy failed");
-                  }}
-
-                  status.textContent = "تم النسخ ✓";
-                }} catch (fallbackError) {{
-                  status.textContent = "تعذر النسخ التلقائي.";
-                }}
+                status.textContent = "تعذر النسخ التلقائي.";
               }}
             }});
           </script>
@@ -790,7 +867,7 @@ def render_copy_button(text, button_id):
 
 
 # =========================================================
-# 13. الشريط الجانبي
+# 11. الشريط الجانبي
 # =========================================================
 
 with st.sidebar:
@@ -812,15 +889,10 @@ with st.sidebar:
         ),
     )
 
-    st.caption(
-        "النماذج التي تظهر هنا متاحة في قائمة حسابك، "
-        "لكن توفرها لا يضمن دعم كل أداة."
-    )
-
     if vision_options:
         st.caption("نموذج الصور: " + vision_options[0])
     else:
-        st.warning("لم يظهر نموذج صور متاح في قائمة الاختيارات.")
+        st.warning("لم يظهر نموذج صور مناسب.")
 
     st.divider()
     st.subheader("🧰 الأدوات")
@@ -829,24 +901,67 @@ with st.sidebar:
         "🔎 البحث في الإنترنت",
         value=False,
         disabled=not bool(search_options),
-        help="البحث يستخدم نموذجًا يدعم الأداة عند الحاجة.",
     )
 
     enable_code = st.toggle(
         "🧮 تشغيل الكود والحسابات",
         value=False,
         disabled=not bool(code_options),
-        help="يسمح للنموذج باستخدام أداة تشغيل الكود المدعومة.",
     )
 
     enable_review = st.toggle(
         "🛡️ مراجعة إضافية للإجابة",
         value=False,
-        help=(
-            "يرسل الإجابة لمراجعة ثانية؛ قد يزيد استهلاك API "
-            "ولا يضمن خلو الإجابة من الأخطاء."
-        ),
+        help="قد تزيد استهلاك API، ولا تضمن خلو الإجابة من الأخطاء.",
     )
+
+    # -----------------------------------------------
+    # التحقق المستقل من المرجع
+    # -----------------------------------------------
+
+    st.divider()
+    st.subheader("📚 التحقق من مرجع علمي")
+
+    st.caption(
+        "أدخل عنوان دراسة أو DOI أو رابط DOI. "
+        "ستُفحص بيانات السجل في Crossref."
+    )
+
+    with st.form("reference_verification_form"):
+        reference_query = st.text_input(
+            "عنوان الدراسة أو DOI",
+            placeholder="مثال: 10.xxxx/xxxxx",
+        )
+
+        verify_submitted = st.form_submit_button(
+            "تحقق من المرجع",
+            use_container_width=True,
+        )
+
+    if verify_submitted:
+        try:
+            with st.spinner("جارٍ البحث في سجل Crossref..."):
+                reference_results = verify_reference(reference_query)
+
+            if not reference_results:
+                st.warning(
+                    "لم تظهر نتائج في Crossref. هذا لا يثبت أن "
+                    "المرجع مختلق؛ قد يكون خارج قاعدة البيانات."
+                )
+            else:
+                for index, result in enumerate(reference_results):
+                    with st.expander(
+                        f"النتيجة {index + 1}: {result['title']}",
+                        expanded=(index == 0),
+                    ):
+                        display_reference_result(result)
+
+        except Exception as error:
+            st.error(
+                "تعذر التحقق من المرجع. قد تكون هناك مشكلة "
+                "اتصال أو أن Crossref لم يجد DOI المطلوب."
+            )
+            st.caption(str(error))
 
     st.divider()
     st.subheader("💾 إدارة المحادثات")
@@ -900,30 +1015,29 @@ with st.sidebar:
                 st.rerun()
 
             except Exception:
-                st.error(
-                    "تعذرت استعادة الملف. تأكد من سلامة JSON."
-                )
+                st.error("تعذرت استعادة الملف. تأكد من سلامة JSON.")
 
     if st.button("مسح المحادثة", use_container_width=True):
         st.session_state.messages = []
         st.session_state.last_sources = []
+        st.session_state.last_model_used = ""
         st.rerun()
 
 
 # =========================================================
-# 14. واجهة المساعد
+# 12. واجهة المساعد
 # =========================================================
 
 st.title("🤖 المساعد الذكي الشامل")
 
 st.caption(
-    "دردشة • بحث • تحليل صور • تعليم • برمجة • مراجعة اختيارية"
+    "دردشة • بحث • صور • تعليم • برمجة • تدقيق مراجع"
 )
 
 if not st.session_state.messages:
     st.info(
-        "اكتب سؤالك. اختر وضع الإجابة من الإعدادات، "
-        "وفعّل البحث عندما تحتاج معلومات حديثة أو توثيقًا."
+        "اكتب سؤالك. استخدم البحث للمعلومات الحديثة، "
+        "وقسم التحقق لفحص بيانات مرجع علمي مستقلًا."
     )
 
 for index, message in enumerate(st.session_state.messages):
@@ -939,8 +1053,8 @@ for index, message in enumerate(st.session_state.messages):
 if st.session_state.last_sources:
     with st.expander("🔗 الروابط التي ظهرت في آخر بحث"):
         st.warning(
-            "ظهور الرابط لا يثبت بمفرده أن محتواه يدعم الادعاء. "
-            "راجع المصدر نفسه قبل اعتماد المعلومة."
+            "وجود الرابط لا يثبت أنه يدعم الادعاء. "
+            "افتح المصدر وراجع محتواه."
         )
 
         for source in st.session_state.last_sources:
@@ -956,7 +1070,7 @@ if st.session_state.last_model_used:
 
 
 # =========================================================
-# 15. إدخال السؤال والصورة
+# 13. إدخال السؤال والصورة
 # =========================================================
 
 with st.form("chat_form", clear_on_submit=True):
@@ -979,7 +1093,7 @@ with st.form("chat_form", clear_on_submit=True):
 
 
 # =========================================================
-# 16. تنفيذ الطلب
+# 14. تنفيذ الطلب
 # =========================================================
 
 if submitted:
@@ -998,9 +1112,8 @@ if submitted:
         try:
             sources = []
             model_used = ""
-            used_search = False
 
-            with st.spinner("جارٍ تحليل الطلب وتجهيز الإجابة..."):
+            with st.spinner("جارٍ تجهيز الإجابة..."):
                 if uploaded_image is not None:
                     answer, model_used = analyze_image(
                         question,
@@ -1012,7 +1125,6 @@ if submitted:
                         question,
                         enable_code=enable_code,
                     )
-                    used_search = True
 
                 else:
                     answer, model_used = call_chat(
@@ -1023,11 +1135,11 @@ if submitted:
                 if not answer.strip():
                     answer = (
                         "لم يرجع النموذج إجابة نصية. "
-                        "جرّب إعادة صياغة السؤال."
+                        "حاول إعادة صياغة السؤال."
                     )
 
                 if enable_review and uploaded_image is None:
-                    with st.spinner("تتم مراجعة الإجابة..."):
+                    with st.spinner("جارٍ مراجعة الإجابة..."):
                         answer = review_answer(
                             question,
                             answer,
@@ -1051,16 +1163,14 @@ if submitted:
 
         except Exception as error:
             st.error(
-                "تعذر إكمال الطلب. قد يكون السبب نموذجًا غير متاح، "
-                "أو أداة غير مدعومة، أو مشكلة في مفتاح API "
-                "أو حدود الاستخدام."
+                "تعذر إكمال الطلب. تحقق من النموذج المختار "
+                "ومفتاح API وحدود الاستخدام ودعم الأدوات."
             )
 
             with st.expander("تفاصيل الخطأ"):
                 st.code(str(error))
 
             st.info(
-                "جرّب تعطيل أدوات البحث وتشغيل الكود والمراجعة "
-                "ثم أعد السؤال. لا تشارك تفاصيل الخطأ إذا كانت "
-                "تحتوي على معلومات سرية."
+                "جرّب تعطيل البحث وتشغيل الكود والمراجعة، "
+                "ثم أعد السؤال."
             )
