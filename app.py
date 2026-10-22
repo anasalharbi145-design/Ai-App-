@@ -3,7 +3,6 @@ import os
 import io
 import json
 import base64
-import html
 import re
 
 import streamlit as st
@@ -12,27 +11,28 @@ from PIL import Image
 from groq import Groq
 
 
-# ==================================================
-# 1. الإعدادات
-# ==================================================
+# =========================================================
+# 1. إعدادات التطبيق
+# =========================================================
 
 st.set_page_config(
-    page_title="المساعد الذكي الشامل",
+    page_title="المساعد الذكي",
     page_icon="🤖",
-    layout="wide",
+    layout="centered",
+    initial_sidebar_state="collapsed",
 )
 
-MAX_TOKENS = 2048
-HISTORY_LIMIT = 12
-IMAGE_MAX_SIDE = 1024
+MAX_TOKENS = 4096
+HISTORY_LIMIT = 16
+IMAGE_MAX_SIDE = 1280
 IMAGE_MAX_BYTES = 10 * 1024 * 1024
 
 CHAT_PREFERENCES = [
     "openai/gpt-oss-120b",
     "openai/gpt-oss-20b",
     "llama-3.3-70b-versatile",
-    "llama-3.1-8b-instant",
     "qwen/qwen3-32b",
+    "llama-3.1-8b-instant",
 ]
 
 VISION_PREFERENCES = [
@@ -40,138 +40,190 @@ VISION_PREFERENCES = [
     "qwen/qwen3.6-27b",
 ]
 
-SEARCH_PREFERENCES = [
+TOOL_MODEL_PREFERENCES = [
     "openai/gpt-oss-120b",
     "openai/gpt-oss-20b",
 ]
 
-CODE_TOOL_MODELS = {
-    "openai/gpt-oss-120b",
-    "openai/gpt-oss-20b",
-}
+SEARCH_MODELS = set(TOOL_MODEL_PREFERENCES)
+CODE_MODELS = set(TOOL_MODEL_PREFERENCES)
 
-SEARCH_TOOL_MODELS = set(SEARCH_PREFERENCES)
 
+# =========================================================
+# 2. تعليمات الذكاء الاصطناعي
+# =========================================================
 
 SYSTEM_PROMPT = """
-أنت مساعد ذكاء اصطناعي عام متعدد المجالات.
-
-هدفك حل المشكلات والإجابة بدقة، وليس إنتاج إجابات تبدو مقنعة فقط.
+أنت مساعد ذكاء اصطناعي عام، دقيق، عملي، ومتعدد المجالات.
+مهمتك مساعدة المستخدم على الفهم وحل المشكلات، لا مجرد إنتاج
+إجابة مقنعة لغويًا.
 
 المجالات:
-العلوم، الرياضيات، البرمجة، التعليم، البحث، الكتابة،
-الترجمة، التخطيط، تحليل البيانات والصور.
+العلوم، الرياضيات، البرمجة، البحث، التعليم، الكتابة، الترجمة،
+تحليل الصور، تحليل البيانات، التخطيط، والتفكير النقدي.
 
-قواعد الدقة:
-1. لا تختلق حقائق أو أرقامًا أو دراسات أو أسماء باحثين.
-2. لا تختلق روابط أو مراجع أو نتائج بحث.
-3. ميّز بين الحقيقة المثبتة والاستنتاج والفرضية والرأي.
-4. إذا لم تعرف أو لم تكف الأدلة، فقل ذلك.
-5. لا تصغ الأدلة الضعيفة كأنها يقينية.
-6. تكرار الادعاء في مواقع متعددة ليس دليلًا مستقلًا بالضرورة.
-7. لا تخلط بين الارتباط والسببية.
-8. لا تعمم نتائج دراسة واحدة على جميع الحالات.
-9. راجع الأرقام والوحدات والتواريخ والأسماء.
-10. صحح افتراضات المستخدم الخاطئة بأدب ووضوح.
-11. لا توافق المستخدم لمجرد إرضائه.
-12. لا تدّع استخدام أداة لم تستخدمها فعلًا.
+أولًا: الدقة والنزاهة
+- لا تختلق حقائق أو أرقامًا أو دراسات أو أسماء أشخاص أو مراجع.
+- لا تدّع أنك بحثت أو اختبرت كودًا أو نفذت عملية لم تنفذها.
+- ميّز بين المعلومة المؤكدة والاستنتاج والفرضية والتوقع والرأي.
+- إذا كانت الأدلة غير كافية، قل ذلك بوضوح.
+- إذا كان السؤال يعتمد على معلومات حديثة، فابحث إن توفرت الأداة.
+- إذا لم تستخدم البحث، فلا توحِ بأنك تحققت من المعلومات حديثًا.
+- لا تعتبر تكرار المعلومة في مواقع كثيرة دليلًا مستقلًا.
+- لا تخلط بين الارتباط والسببية.
+- لا تعمم نتائج دراسة واحدة دون مبرر.
+- لا توافق المستخدم لمجرد إرضائه؛ صحح الأخطاء باحترام.
+- إذا اكتشفت خطأ في إجابتك السابقة، اعترف به وصححه.
+- لا تخلط بين عدم العثور على دليل وبين ثبوت أن الادعاء خاطئ.
 
-البحث والمصادر:
-- استخدم نتائج البحث الفعلية عند توفر أداة البحث.
-- فضّل المصادر الأصلية والرسمية والأبحاث المحكمة.
-- تحقق من مدى ارتباط المصدر بالادعاء المحدد.
-- لا تعتبر عنوان الصفحة وحده دليلًا على محتواها.
-- لا تخترع أسماء الدراسات أو الروابط.
-- فرّق بين مصدر عُرض في نتائج البحث ومصدر فُحص محتواه.
-- إذا لم تكف النتائج، صرّح بأن التحقق غير مكتمل.
-- لا تعتبر رابطًا ظهر في الإجابة إثباتًا لصحة الادعاء.
-- عند تدقيق قائمة، افحص كل ادعاء على حدة.
-- استخدم التصنيفات: صحيح، صحيح جزئيًا، خاطئ،
-  غير مدعوم، أو لا تكفي الأدلة للحكم.
+ثانيًا: البحث والمصادر
+عند استخدام البحث:
+- فضّل المصادر الأصلية والرسمية والدراسات المحكمة.
+- ابحث عن الدليل الذي يدعم الادعاء المحدد، لا العنوان فقط.
+- ميّز بين صفحة ظهرت في النتائج وصفحة فُحص محتواها.
+- لا تخترع روابط أو عناوين دراسات أو أسماء مؤلفين.
+- احتفظ بالقيود والتعارضات المهمة بين المصادر.
+- اذكر تاريخ المعلومة إذا كان مهمًا.
+- لا تقل إن كل ادعاء تحقق بالكامل إذا لم يحدث ذلك.
+- إذا لم تتوفر مصادر كافية، قل: لم أتمكن من التحقق الكافي.
+- لا تعتبر وجود رابط وحده إثباتًا لصحة المعلومة.
 
-الرياضيات:
-- تحقق من خطوات الحل والناتج والوحدات.
-- وضّح الافتراضات المؤثرة.
-- استخدم أدوات الحساب المتاحة عندما تفيد.
-- لا تدّع تشغيل حساب برمجي دون تشغيله.
+ثالثًا: التفكير وحل المشكلات
+- حدد المطلوب والقيود قبل الحل.
+- استخدم الطريقة المناسبة للمسألة بدل تطبيق قالب واحد على كل شيء.
+- افحص الافتراضات والوحدات والأرقام والحالات الاستثنائية.
+- قارن بين التفسيرات المعقولة عندما يكون السؤال ملتبسًا.
+- أعط النتيجة أولًا، ثم الأسباب والأدلة المفيدة.
+- لا تعرض سلسلة التفكير الداخلية؛ قدم ملخصًا واضحًا للأسباب
+  والخطوات التي يستطيع المستخدم التحقق منها.
+- لا تتظاهر باليقين حين تكون المسألة غير محسومة.
 
-البرمجة:
-- افحص الاستيرادات وأنواع البيانات وتدفق التنفيذ.
-- حافظ على الوظائف الموجودة عند تعديل مشروع.
-- لا تدّع اختبار الكود دون تشغيله.
-- لا تكشف مفاتيح API أو الأسرار.
-- ميّز بين الكود المقترح والكود الذي اختُبر.
+رابعًا: الرياضيات والعلوم
+- اشرح الرموز والقواعد عند حاجة المستخدم إليها.
+- تحقق من الناتج والوحدات والإشارات والافتراضات.
+- استخدم أداة تشغيل الكود المتاحة عند فائدتها.
+- ميّز بين القياس التجريبي والتفسير النظري والفرضية.
+- عند تدقيق الحقائق، صنفها إلى:
+  صحيح، صحيح جزئيًا، خاطئ، غير مدعوم، أو غير محسوم.
+- لا تستنتج دقة رقم من عدد منازل عشرية فقط.
 
-الصور والبيانات:
-- استنتج من المدخلات المتاحة فقط.
-- وضّح عدم اليقين إذا كانت الصورة غير واضحة.
-- لا تخترع تفاصيل غير موجودة.
+خامسًا: البرمجة
+- حافظ على الوظائف الموجودة عندما تعدل مشروعًا قائمًا.
+- افحص الاستيرادات وتوافق المكتبات وأنواع البيانات.
+- وضح المتطلبات والإعدادات اللازمة للتشغيل.
+- لا تدّع اختبار الكود إلا إذا شُغّل فعلًا.
+- لا تكشف مفاتيح API أو كلمات المرور.
+- لا تضع الأسرار في الواجهة الأمامية أو في ملفات عامة.
+- اذكر بوضوح أي جزء لم يتم اختباره.
 
-الأسلوب:
-- أجب بلغة المستخدم.
-- كن مباشرًا وتجنب الحشو.
-- أجب باختصار في الأسئلة البسيطة.
-- نظّم الإجابات المعقدة إلى نتائج وأدلة وقيود.
-- لا تعرض سلسلة التفكير الداخلية؛ قدم النتيجة
-  والأسباب المفيدة للتحقق منها.
+سادسًا: الصور والبيانات
+- اعتمد على ما يظهر فعلًا في الصورة أو البيانات.
+- لا تخترع تفاصيل غير واضحة.
+- اشرح القيود إذا كانت الدقة أو جودة المدخلات ضعيفة.
+- لا تستنتج بيانات شخصية حساسة من صورة دون مبرر.
+
+سابعًا: أسلوب التواصل
+- استخدم لغة المستخدم.
+- كن مباشرًا، واضحًا، ومنظمًا.
+- لا تكثر من المقدمات والمديح والحشو.
+- الأسئلة البسيطة تستحق إجابات قصيرة.
+- الأسئلة المعقدة تستحق شرحًا كافيًا دون تكرار.
+- اسأل سؤالًا توضيحيًا واحدًا إذا كان الغموض يمنع الحل.
+- لا تعد المستخدم بنتيجة لا تستطيع ضمانها.
 
 قبل إرسال الإجابة:
-راجع الدقة، والتناقضات، والوحدات، والمصادر،
-وحدود الأدلة. صحح الأخطاء الممكنة قبل الإرسال.
+راجع الأرقام والتناقضات والاستنتاجات والمصادر والقيود.
+صحح الأخطاء الواضحة، وصرّح بما بقي غير مؤكد.
 """
 
 
 RESEARCH_PROMPT = """
 وضع البحث والتحقق:
-
 استخدم أداة البحث المتاحة في هذا الطلب.
-افحص الادعاءات بشكل منفصل.
-ابحث عن المصادر الأصلية عندما يكون ذلك ممكنًا.
-اعرض عنوان المصدر والرابط الفعلي إذا توفرا.
-اشرح أي جزء من الادعاء يدعمه المصدر.
-لا تخترع بيانات ببليوغرافية أو روابط.
-لا تعتبر وجود الرابط دليلًا كافيًا على صحة الادعاء.
-إذا لم تتمكن من فحص محتوى مصدر، فصرّح بذلك.
-إذا تعارضت الأدلة، وضّح التعارض.
-إذا لم تكف الأدلة، استخدم عبارة «غير متحقق».
-لا تدّع أنك تحققت من جميع الادعاءات إذا لم يحدث ذلك.
+ابحث عن معلومات تدعم الادعاءات الأساسية بشكل مباشر.
+فضّل المصادر الأصلية والرسمية والأبحاث العلمية.
+اعرض الروابط الفعلية التي توفرها نتائج البحث عندما تتوفر.
+اشرح ما الذي يدعمه كل مصدر، وما الذي لا يدعمه.
+لا تختلق اقتباسات أو روابط أو بيانات ببليوغرافية.
+إذا لم تتمكن من التحقق من محتوى مصدر، فصرّح بذلك.
+إذا تعارضت المصادر، وضّح التعارض ولا تخفِه.
+إذا لم تكف الأدلة، صنّف الادعاء بأنه غير متحقق.
+لا تدّع أن وجود المصادر يثبت صحة كل جملة.
 
-نظّم الإجابة عند الحاجة إلى:
-1. النتيجة المختصرة.
-2. حكم كل ادعاء.
-3. الأدلة والقيود.
-4. المصادر التي أمكن تحديدها فعلًا.
+عند تدقيق عدة ادعاءات، افحص كل ادعاء على حدة.
+نظّم النتيجة إلى:
+1. الحكم المختصر.
+2. الأدلة لكل ادعاء.
+3. القيود ومواطن عدم اليقين.
+4. المصادر والروابط المتاحة فعلًا.
 """
 
 
-# ==================================================
-# 2. التصميم
-# ==================================================
+MODES = {
+    "متوازن": """
+أجب بأفضل توازن بين الدقة والوضوح والاختصار.
+ابدأ بالإجابة المباشرة ثم أضف التفاصيل الضرورية.
+""",
+    "تحليل عميق": """
+حلل المشكلة بعناية.
+حدد الافتراضات والقيود والبدائل والتفسيرات المحتملة.
+افحص الاتساق والأرقام والأدلة قبل عرض النتيجة.
+قدم ملخصًا للأسباب المهمة دون عرض سلسلة التفكير الداخلية.
+لا تطل إذا كانت المسألة بسيطة.
+""",
+    "بحث وتحقق": RESEARCH_PROMPT,
+    "معلّم خطوة بخطوة": """
+تصرف كمعلم صبور.
+اشرح الفكرة من الأساس إلى التطبيق.
+قسّم المسائل الصعبة إلى خطوات واضحة، واستخدم مثالًا عند فائدته.
+لا تفترض أن المستخدم يعرف المصطلحات المتقدمة.
+في نهاية الشرح، قدم سؤالًا تدريبيًا قصيرًا إذا كان مناسبًا.
+""",
+}
+
+
+# =========================================================
+# 3. تنسيق الواجهة
+# =========================================================
 
 st.markdown(
     """
     <style>
     .stApp {
-        background-color: #101114;
-        color: #ffffff;
+        background: #101114;
+        color: #f5f5f5;
+    }
+
+    [data-testid="stHeader"] {
+        background: rgba(16, 17, 20, 0.96);
+    }
+
+    [data-testid="stMainBlockContainer"] {
+        max-width: 900px;
+        padding: 1rem 1rem 2rem;
     }
 
     h1, h2, h3, p, label {
-        color: #ffffff;
+        color: #f5f5f5;
     }
 
     .stTextArea textarea {
-        background-color: #ffffff !important;
-        color: #111111 !important;
-        border-radius: 10px;
+        background: #202126 !important;
+        color: #ffffff !important;
+        border: 1px solid #45464d !important;
+        border-radius: 14px !important;
+        font-size: 16px !important;
     }
 
     .stTextArea textarea::placeholder {
-        color: #555555 !important;
+        color: #b6b6bd !important;
     }
 
-    .stButton button {
-        border-radius: 10px;
+    .stButton button,
+    .stFormSubmitButton button,
+    .stDownloadButton button {
+        border-radius: 12px;
+        min-height: 44px;
         font-weight: 600;
     }
 
@@ -180,8 +232,30 @@ st.markdown(
     }
 
     [data-testid="stExpander"] {
-        border: 1px solid #444444;
-        border-radius: 10px;
+        border: 1px solid #414249;
+        border-radius: 12px;
+    }
+
+    [data-testid="stChatMessage"] {
+        border-radius: 14px;
+    }
+
+    a {
+        overflow-wrap: anywhere;
+    }
+
+    @media (max-width: 600px) {
+        [data-testid="stMainBlockContainer"] {
+            padding: 0.65rem 0.7rem 1.5rem;
+        }
+
+        h1 {
+            font-size: 1.6rem !important;
+        }
+
+        [data-testid="stChatMessage"] {
+            padding: 0.6rem;
+        }
     }
     </style>
     """,
@@ -189,13 +263,12 @@ st.markdown(
 )
 
 
-# ==================================================
-# 3. الاتصال بـ Groq
-# ==================================================
+# =========================================================
+# 4. الاتصال الآمن بـ Groq
+# =========================================================
 
 def get_secret(name):
     value = os.getenv(name, "")
-
     if value:
         return value
 
@@ -210,16 +283,16 @@ GROQ_API_KEY = get_secret("GROQ_API_KEY")
 if not GROQ_API_KEY:
     st.error(
         "لم يتم العثور على GROQ_API_KEY. "
-        "أضفه في Secrets بإعدادات التطبيق."
+        "أضفه في Secrets بإعدادات Streamlit Cloud."
     )
     st.stop()
 
 client = Groq(api_key=GROQ_API_KEY)
 
 
-# ==================================================
-# 4. جلب النماذج واختيار المتاح
-# ==================================================
+# =========================================================
+# 5. اكتشاف النماذج المتاحة
+# =========================================================
 
 @st.cache_data(ttl=300, show_spinner=False)
 def get_available_models():
@@ -227,69 +300,403 @@ def get_available_models():
     return sorted(model.id for model in result.data)
 
 
-def preferred_available(preferences, available):
-    return [
-        model for model in preferences
-        if model in available
-    ]
-
-
 try:
     available_models = get_available_models()
 except Exception:
     st.error(
-        "تعذر جلب قائمة النماذج من Groq. "
-        "تحقق من مفتاح API والاتصال وحدود حسابك."
+        "تعذر جلب النماذج من Groq. تحقق من مفتاح API "
+        "والاتصال وحالة حسابك."
     )
     st.stop()
 
 
-chat_options = preferred_available(
-    CHAT_PREFERENCES,
-    available_models,
-)
+def available_preferences(preferences):
+    return [m for m in preferences if m in available_models]
 
-vision_options = preferred_available(
-    VISION_PREFERENCES,
-    available_models,
-)
 
-search_options = preferred_available(
-    SEARCH_PREFERENCES,
-    available_models,
-)
+chat_options = available_preferences(CHAT_PREFERENCES)
+vision_options = available_preferences(VISION_PREFERENCES)
+tool_model_options = available_preferences(TOOL_MODEL_PREFERENCES)
+
+search_options = [
+    m for m in tool_model_options if m in SEARCH_MODELS
+]
+code_options = [
+    m for m in tool_model_options if m in CODE_MODELS
+]
 
 if not chat_options:
     st.error(
-        "لم أجد نموذج دردشة من النماذج المدعومة في قائمة "
-        "الاختيارات الحالية. راجع النماذج المتاحة في حساب Groq."
+        "لم يظهر أي نموذج دردشة من قائمة الاختيارات. "
+        "راجع النماذج المتاحة في حساب Groq وحدّث قائمة "
+        "CHAT_PREFERENCES داخل الملف عند الحاجة."
     )
     st.stop()
 
 
-# ==================================================
-# 5. ذاكرة الجلسة
-# ==================================================
+# =========================================================
+# 6. حالة الجلسة
+# =========================================================
 
-if "messages" not in st.session_state:
-    st.session_state.messages = []
+DEFAULTS = {
+    "messages": [],
+    "last_sources": [],
+    "selected_chat_model": chat_options[0],
+    "selected_mode": "متوازن",
+    "last_model_used": "",
+}
 
-if "last_sources" not in st.session_state:
-    st.session_state.last_sources = []
-
-if "last_search_used" not in st.session_state:
-    st.session_state.last_search_used = False
-
-if "selected_chat_model" not in st.session_state:
-    st.session_state.selected_chat_model = chat_options[0]
+for key, value in DEFAULTS.items():
+    if key not in st.session_state:
+        st.session_state[key] = value
 
 if st.session_state.selected_chat_model not in chat_options:
     st.session_state.selected_chat_model = chat_options[0]
 
+if st.session_state.selected_mode not in MODES:
+    st.session_state.selected_mode = "متوازن"
 
-# ==================================================
-# 6. زر نسخ الإجابة
-# ==================================================
+
+def build_history():
+    history = []
+
+    for item in st.session_state.messages[-HISTORY_LIMIT:]:
+        if (
+            isinstance(item, dict)
+            and item.get("role") in ("user", "assistant")
+            and isinstance(item.get("content"), str)
+        ):
+            history.append({
+                "role": item["role"],
+                "content": item["content"],
+            })
+
+    while history and history[0]["role"] == "assistant":
+        history.pop(0)
+
+    return history
+
+
+def build_system_prompt():
+    mode = st.session_state.selected_mode
+    mode_prompt = MODES.get(mode, MODES["متوازن"])
+
+    return SYSTEM_PROMPT + "\n\n" + mode_prompt
+
+
+def make_messages(user_text, include_user=True):
+    messages = [{
+        "role": "system",
+        "content": build_system_prompt(),
+    }]
+
+    messages.extend(build_history())
+
+    if include_user:
+        messages.append({
+            "role": "user",
+            "content": user_text,
+        })
+
+    return messages
+
+
+# =========================================================
+# 7. أدوات مساعدة
+# =========================================================
+
+def completion_text(response):
+    try:
+        return response.choices[0].message.content or ""
+    except Exception:
+        return ""
+
+
+def extract_sources(response_data, answer=""):
+    """
+    يستخرج الروابط الفعلية الموجودة في نص الإجابة
+    أو بيانات الاستجابة. لا يثبت أن الرابط يدعم الادعاء.
+    """
+    found = []
+
+    def add(url, title=""):
+        if isinstance(url, dict):
+            url = url.get("url") or url.get("uri")
+
+        if not isinstance(url, str):
+            return
+
+        url = url.strip().rstrip(".,;)]}")
+
+        if not re.match(r"^https?://", url, re.I):
+            return
+
+        found.append({
+            "title": str(title or url),
+            "url": url,
+        })
+
+    def walk(value):
+        if isinstance(value, dict):
+            title = (
+                value.get("title")
+                or value.get("name")
+                or value.get("source_title")
+                or ""
+            )
+
+            for key in ("url", "uri", "href", "link"):
+                if key in value:
+                    add(value[key], title)
+
+            for child in value.values():
+                walk(child)
+
+        elif isinstance(value, list):
+            for child in value:
+                walk(child)
+
+        elif isinstance(value, str):
+            urls = re.findall(
+                r"https?://[^\s<>\"']+",
+                value,
+                flags=re.I,
+            )
+            for url in urls:
+                add(url)
+
+    walk(response_data)
+    walk(answer)
+
+    unique = []
+    seen = set()
+
+    for source in found:
+        if source["url"] not in seen:
+            seen.add(source["url"])
+            unique.append(source)
+
+    return unique[:20]
+
+
+def image_to_data_url(image_file):
+    image_file.seek(0)
+    raw = image_file.read()
+
+    if len(raw) > IMAGE_MAX_BYTES:
+        raise ValueError(
+            "حجم الصورة يتجاوز 10 ميغابايت. "
+            "اختر صورة أصغر."
+        )
+
+    with Image.open(io.BytesIO(raw)) as original:
+        image = original.convert("RGB")
+        image.thumbnail((IMAGE_MAX_SIDE, IMAGE_MAX_SIDE))
+
+        buffer = io.BytesIO()
+        image.save(
+            buffer,
+            format="JPEG",
+            quality=82,
+            optimize=True,
+        )
+
+    encoded = base64.b64encode(
+        buffer.getvalue()
+    ).decode("utf-8")
+
+    return "data:image/jpeg;base64," + encoded
+
+
+def call_completion(model, messages, tools=None, tool_choice=None):
+    kwargs = {
+        "model": model,
+        "messages": messages,
+        "temperature": 0.2,
+        "max_completion_tokens": MAX_TOKENS,
+    }
+
+    if tools:
+        kwargs["tools"] = tools
+
+    if tool_choice:
+        kwargs["tool_choice"] = tool_choice
+
+    return client.chat.completions.create(**kwargs)
+
+
+# =========================================================
+# 8. الدردشة
+# =========================================================
+
+def call_chat(user_text, enable_code=False):
+    selected_model = st.session_state.selected_chat_model
+    model = selected_model
+    tools = None
+
+    if enable_code:
+        if selected_model in CODE_MODELS:
+            tools = [{"type": "code_interpreter"}]
+        elif code_options:
+            model = code_options[0]
+            tools = [{"type": "code_interpreter"}]
+
+    response = call_completion(
+        model=model,
+        messages=make_messages(user_text),
+        tools=tools,
+    )
+
+    return completion_text(response), model
+
+
+# =========================================================
+# 9. البحث في الإنترنت
+# =========================================================
+
+def research_with_web(user_text, enable_code=False):
+    if not search_options:
+        raise RuntimeError(
+            "البحث المدمج غير متاح ضمن النماذج الظاهرة في حسابك."
+        )
+
+    selected_model = st.session_state.selected_chat_model
+
+    if selected_model in SEARCH_MODELS:
+        model = selected_model
+    else:
+        model = search_options[0]
+
+    tools = [{"type": "browser_search"}]
+
+    if enable_code and model in CODE_MODELS:
+        tools.append({"type": "code_interpreter"})
+
+    messages = make_messages(user_text)
+    messages[0]["content"] += "\n\n" + RESEARCH_PROMPT
+
+    response = call_completion(
+        model=model,
+        messages=messages,
+        tools=tools,
+        tool_choice="required",
+    )
+
+    answer = completion_text(response)
+
+    try:
+        response_data = response.model_dump()
+    except Exception:
+        response_data = {}
+
+    sources = extract_sources(response_data, answer)
+
+    if not answer.strip():
+        answer = "لم يرجع البحث إجابة نصية. حاول مرة أخرى."
+
+    if not sources:
+        answer += (
+            "\n\n**تنبيه توثيق:** لم أستطع استخراج روابط مباشرة "
+            "من الاستجابة. لا يعني ذلك أن الإجابة خاطئة، "
+            "لكنه يعني أن توثيقها بالروابط لم يكتمل."
+        )
+
+    return answer, sources, model
+
+
+# =========================================================
+# 10. تحليل الصور
+# =========================================================
+
+def analyze_image(user_text, image_file):
+    if not vision_options:
+        raise RuntimeError(
+            "لم يظهر نموذج رؤية مناسب ضمن النماذج المتاحة."
+        )
+
+    model = vision_options[0]
+    image_url = image_to_data_url(image_file)
+
+    prompt = user_text.strip() or (
+        "حلل الصورة بدقة، وافصل بين ما يظهر بوضوح "
+        "وما لا تستطيع التأكد منه."
+    )
+
+    messages = make_messages("", include_user=False)
+
+    messages.append({
+        "role": "user",
+        "content": [
+            {
+                "type": "text",
+                "text": prompt,
+            },
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": image_url,
+                },
+            },
+        ],
+    })
+
+    response = call_completion(
+        model=model,
+        messages=messages,
+    )
+
+    return completion_text(response), model
+
+
+# =========================================================
+# 11. مراجعة الإجابة اختياريًا
+# =========================================================
+
+def review_answer(question, answer, model):
+    """
+    مراجعة إضافية اختيارية. ليست ضمانًا للصحة،
+    ولا تغني عن التحقق من المصادر الأصلية.
+    """
+    review_prompt = """
+راجع الإجابة التالية مراجعة نقدية.
+ابحث عن الأخطاء الواقعية والمنطقية والحسابية،
+والتناقضات والمبالغة والادعاءات غير المدعومة.
+إذا وجدت خطأ واضحًا، صحح الإجابة.
+إذا لم تستطع حسم ادعاء، وضّح عدم اليقين.
+لا تخترع مصادر أو نتائج بحث.
+لا تعرض سلسلة التفكير الداخلية.
+أعد الإجابة النهائية المصححة فقط، مع الاحتفاظ
+بالمعلومات المفيدة وعدم إطالة النص دون حاجة.
+"""
+
+    messages = [
+        {
+            "role": "system",
+            "content": SYSTEM_PROMPT + "\n\n" + review_prompt,
+        },
+        {
+            "role": "user",
+            "content": (
+                "السؤال الأصلي:\n"
+                + question
+                + "\n\nالإجابة المراد مراجعتها:\n"
+                + answer
+            ),
+        },
+    ]
+
+    response = call_completion(
+        model=model,
+        messages=messages,
+    )
+
+    revised = completion_text(response)
+    return revised.strip() if revised.strip() else answer
+
+
+# =========================================================
+# 12. زر نسخ الإجابة
+# =========================================================
 
 def render_copy_button(text, button_id):
     safe_text = json.dumps(
@@ -297,7 +704,7 @@ def render_copy_button(text, button_id):
         ensure_ascii=False,
     ).replace("</", "<\\/")
 
-    safe_id = str(button_id)
+    safe_id = re.sub(r"[^a-zA-Z0-9_-]", "_", str(button_id))
 
     components.html(
         f"""
@@ -382,308 +789,14 @@ def render_copy_button(text, button_id):
     )
 
 
-# ==================================================
-# 7. سجل المحادثة
-# ==================================================
-
-def build_history():
-    history = []
-
-    for item in st.session_state.messages[-HISTORY_LIMIT:]:
-        if (
-            isinstance(item, dict)
-            and item.get("role") in ("user", "assistant")
-            and isinstance(item.get("content"), str)
-        ):
-            history.append({
-                "role": item["role"],
-                "content": item["content"],
-            })
-
-    # لا تبدأ المحادثة برسالة مساعد يتيمة.
-    while history and history[0]["role"] == "assistant":
-        history.pop(0)
-
-    return history
-
-
-# ==================================================
-# 8. معالجة الصور
-# ==================================================
-
-def image_to_data_url(image_file):
-    image_file.seek(0)
-
-    raw = image_file.read()
-
-    if len(raw) > IMAGE_MAX_BYTES:
-        raise ValueError(
-            "حجم الصورة أكبر من الحد المسموح به (10 ميغابايت)."
-        )
-
-    with Image.open(io.BytesIO(raw)) as original:
-        image = original.convert("RGB")
-        image.thumbnail((IMAGE_MAX_SIDE, IMAGE_MAX_SIDE))
-
-        buffer = io.BytesIO()
-        image.save(
-            buffer,
-            format="JPEG",
-            quality=82,
-            optimize=True,
-        )
-
-    encoded = base64.b64encode(
-        buffer.getvalue()
-    ).decode("utf-8")
-
-    return "data:image/jpeg;base64," + encoded
-
-
-# ==================================================
-# 9. استخراج المصادر والروابط
-# ==================================================
-
-def extract_sources(response_data, answer=""):
-    """
-    تستخرج الروابط والعناوين الموجودة فعلًا في بيانات الاستجابة.
-    لا تثبت هذه الدالة أن محتوى الرابط يدعم الادعاء.
-    """
-    found = []
-
-    def add(url, title=""):
-        if isinstance(url, dict):
-            url = url.get("url") or url.get("uri")
-
-        if not isinstance(url, str):
-            return
-
-        url = url.strip().rstrip(".,;)]}")
-
-        if not re.match(r"^https?://", url, re.I):
-            return
-
-        found.append({
-            "title": str(title or url),
-            "url": url,
-        })
-
-    def walk(value):
-        if isinstance(value, dict):
-            title = (
-                value.get("title")
-                or value.get("name")
-                or value.get("source_title")
-                or ""
-            )
-
-            for key in ("url", "uri", "href", "link"):
-                if key in value:
-                    add(value[key], title)
-
-            for child in value.values():
-                walk(child)
-
-        elif isinstance(value, list):
-            for child in value:
-                walk(child)
-
-        elif isinstance(value, str):
-            for url in re.findall(
-                r"https?://[^\s<>\"']+",
-                value,
-                flags=re.I,
-            ):
-                add(url)
-
-    walk(response_data)
-    walk(answer)
-
-    unique = []
-    seen = set()
-
-    for item in found:
-        if item["url"] not in seen:
-            seen.add(item["url"])
-            unique.append(item)
-
-    return unique[:20]
-
-
-# ==================================================
-# 10. إنشاء طلب للنموذج
-# ==================================================
-
-def make_messages(user_text, system_prompt=SYSTEM_PROMPT):
-    messages = [
-        {
-            "role": "system",
-            "content": system_prompt,
-        }
-    ]
-
-    messages.extend(build_history())
-
-    messages.append({
-        "role": "user",
-        "content": user_text,
-    })
-
-    return messages
-
-
-def completion_text(response):
-    return response.choices[0].message.content or ""
-
-
-# ==================================================
-# 11. الدردشة العادية وأداة تشغيل الكود
-# ==================================================
-
-def call_chat(user_text, enable_code=False):
-    model = st.session_state.selected_chat_model
-
-    messages = make_messages(user_text)
-    kwargs = {
-        "model": model,
-        "messages": messages,
-        "temperature": 0.2,
-        "max_tokens": MAX_TOKENS,
-    }
-
-    # أداة تشغيل الكود متاحة مع نماذج GPT-OSS المحددة فقط.
-    if enable_code and model in CODE_TOOL_MODELS:
-        kwargs["tools"] = [
-            {"type": "code_interpreter"}
-        ]
-        kwargs["tool_choice"] = "auto"
-
-    response = client.chat.completions.create(**kwargs)
-    return completion_text(response)
-
-
-# ==================================================
-# 12. البحث في الإنترنت
-# ==================================================
-
-def research_with_web(user_text, enable_code=False):
-    if not search_options:
-        raise RuntimeError(
-            "لا يوجد نموذج يدعم البحث المدمج في قائمة حسابك."
-        )
-
-    # البحث يتطلب نموذجًا يدعم browser_search،
-    # حتى لو كان نموذج الدردشة المختار مختلفًا.
-    model = (
-        st.session_state.selected_chat_model
-        if st.session_state.selected_chat_model in SEARCH_TOOL_MODELS
-        else search_options[0]
-    )
-
-    system_prompt = SYSTEM_PROMPT + "\n\n" + RESEARCH_PROMPT
-    messages = make_messages(user_text, system_prompt)
-
-    tools = [{"type": "browser_search"}]
-
-    if enable_code and model in CODE_TOOL_MODELS:
-        tools.append({"type": "code_interpreter"})
-
-    response = client.chat.completions.create(
-        model=model,
-        messages=messages,
-        tools=tools,
-        tool_choice="required",
-        temperature=0.2,
-        max_tokens=MAX_TOKENS,
-    )
-
-    answer = completion_text(response)
-
-    try:
-        response_data = response.model_dump()
-    except Exception:
-        response_data = {}
-
-    sources = extract_sources(response_data, answer)
-
-    if not answer.strip():
-        answer = "لم يرجع البحث إجابة نصية. حاول صياغة السؤال بوضوح."
-
-    if not sources:
-        answer += (
-            "\n\n**تنبيه توثيق:** لم أستطع استخراج روابط مباشرة "
-            "من بيانات الاستجابة. قد يحتوي النص على إحالات داخلية "
-            "للبحث، لكنني لا أملك هنا روابط مستقلة كافية لعرضها. "
-            "هذا لا يعني أن الإجابة خاطئة، ولا يعني أن مصادرها قد "
-            "تم التحقق منها بالكامل."
-        )
-
-    return answer, sources, model
-
-
-# ==================================================
-# 13. تحليل الصور
-# ==================================================
-
-def analyze_image(user_text, image_file):
-    if not vision_options:
-        raise RuntimeError(
-            "لم أجد نموذج رؤية مدعومًا ضمن النماذج المتاحة."
-        )
-
-    model = (
-        VISION_PREFERENCES[0]
-        if VISION_PREFERENCES[0] in vision_options
-        else vision_options[0]
-    )
-
-    image_url = image_to_data_url(image_file)
-
-    prompt = user_text or (
-        "حلل الصورة بدقة. افصل بين ما يظهر بوضوح "
-        "وما لا تستطيع التأكد منه."
-    )
-
-    messages = make_messages(prompt)
-
-    messages.append({
-        "role": "user",
-        "content": [
-            {
-                "type": "text",
-                "text": prompt,
-            },
-            {
-                "type": "image_url",
-                "image_url": {
-                    "url": image_url,
-                },
-            },
-        ],
-    })
-
-    # إزالة آخر رسالة نصية أضافتها make_messages؛
-    # فالرسالة الأخيرة الآن تحتوي السؤال والصورة معًا.
-    messages.pop(-2)
-
-    response = client.chat.completions.create(
-        model=model,
-        messages=messages,
-        temperature=0.2,
-        max_tokens=MAX_TOKENS,
-    )
-
-    return completion_text(response), model
-
-
-# ==================================================
-# 14. الشريط الجانبي
-# ==================================================
+# =========================================================
+# 13. الشريط الجانبي
+# =========================================================
 
 with st.sidebar:
-    st.header("⚙️ الإعدادات")
+    st.header("⚙️ إعدادات المساعد")
 
-    selected_chat = st.selectbox(
+    st.session_state.selected_chat_model = st.selectbox(
         "نموذج الدردشة",
         options=chat_options,
         index=chat_options.index(
@@ -691,21 +804,23 @@ with st.sidebar:
         ),
     )
 
-    st.session_state.selected_chat_model = selected_chat
+    st.session_state.selected_mode = st.selectbox(
+        "طريقة الإجابة",
+        options=list(MODES.keys()),
+        index=list(MODES.keys()).index(
+            st.session_state.selected_mode
+        ),
+    )
+
+    st.caption(
+        "النماذج التي تظهر هنا متاحة في قائمة حسابك، "
+        "لكن توفرها لا يضمن دعم كل أداة."
+    )
 
     if vision_options:
-        st.caption(
-            "نموذج الصور: "
-            + (
-                VISION_PREFERENCES[0]
-                if VISION_PREFERENCES[0] in vision_options
-                else vision_options[0]
-            )
-        )
+        st.caption("نموذج الصور: " + vision_options[0])
     else:
-        st.warning("لا يوجد نموذج صور مناسب ظاهر في حسابك.")
-
-    st.caption(f"النماذج المتاحة في القائمة: {len(available_models)}")
+        st.warning("لم يظهر نموذج صور متاح في قائمة الاختيارات.")
 
     st.divider()
     st.subheader("🧰 الأدوات")
@@ -714,30 +829,27 @@ with st.sidebar:
         "🔎 البحث في الإنترنت",
         value=False,
         disabled=not bool(search_options),
-    )
-
-    if not search_options:
-        st.warning("البحث المدمج غير متاح ضمن النماذج التي ظهرت.")
-
-    code_supported = (
-        selected_chat in CODE_TOOL_MODELS
-        or bool(search_options)
+        help="البحث يستخدم نموذجًا يدعم الأداة عند الحاجة.",
     )
 
     enable_code = st.toggle(
-        "🧮 السماح بأداة تشغيل الكود",
+        "🧮 تشغيل الكود والحسابات",
         value=False,
-        disabled=not code_supported,
-        help="تستخدم الأداة في الحسابات وتحليل البيانات عند دعم النموذج لها.",
+        disabled=not bool(code_options),
+        help="يسمح للنموذج باستخدام أداة تشغيل الكود المدعومة.",
     )
 
-    st.caption(
-        "الأدوات لا تضمن صحة النتائج؛ يجب مراجعة الأدلة "
-        "ومخرجات الحساب عند الحاجة."
+    enable_review = st.toggle(
+        "🛡️ مراجعة إضافية للإجابة",
+        value=False,
+        help=(
+            "يرسل الإجابة لمراجعة ثانية؛ قد يزيد استهلاك API "
+            "ولا يضمن خلو الإجابة من الأخطاء."
+        ),
     )
 
     st.divider()
-    st.subheader("💾 المحادثات")
+    st.subheader("💾 إدارة المحادثات")
 
     history_json = json.dumps(
         st.session_state.messages,
@@ -784,39 +896,36 @@ with st.sidebar:
 
                 st.session_state.messages = valid_messages
                 st.session_state.last_sources = []
-                st.session_state.last_search_used = False
-
                 st.success("تمت استعادة سجل المحادثة.")
                 st.rerun()
 
             except Exception:
-                st.error("تعذرت استعادة الملف. تأكد من سلامة JSON.")
+                st.error(
+                    "تعذرت استعادة الملف. تأكد من سلامة JSON."
+                )
 
     if st.button("مسح المحادثة", use_container_width=True):
         st.session_state.messages = []
         st.session_state.last_sources = []
-        st.session_state.last_search_used = False
         st.rerun()
 
 
-# ==================================================
-# 15. واجهة المساعد
-# ==================================================
+# =========================================================
+# 14. واجهة المساعد
+# =========================================================
 
 st.title("🤖 المساعد الذكي الشامل")
 
 st.caption(
-    "دردشة • بحث • تحليل صور • سجل محادثات • أدوات اختيارية"
+    "دردشة • بحث • تحليل صور • تعليم • برمجة • مراجعة اختيارية"
 )
 
 if not st.session_state.messages:
     st.info(
-        "اكتب سؤالك. فعّل البحث عندما تحتاج معلومات حديثة "
-        "أو تريد التحقق من الادعاءات والمصادر."
+        "اكتب سؤالك. اختر وضع الإجابة من الإعدادات، "
+        "وفعّل البحث عندما تحتاج معلومات حديثة أو توثيقًا."
     )
 
-
-# عرض السجل
 for index, message in enumerate(st.session_state.messages):
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
@@ -827,13 +936,11 @@ for index, message in enumerate(st.session_state.messages):
                 f"history_{index}",
             )
 
-
-# عرض مصادر الاستجابة الأخيرة
 if st.session_state.last_sources:
-    with st.expander("🔗 الروابط التي ظهرت في الاستجابة"):
+    with st.expander("🔗 الروابط التي ظهرت في آخر بحث"):
         st.warning(
             "ظهور الرابط لا يثبت بمفرده أن محتواه يدعم الادعاء. "
-            "افتح المصدر وراجع الدليل المرتبط بالمعلومة."
+            "راجع المصدر نفسه قبل اعتماد المعلومة."
         )
 
         for source in st.session_state.last_sources:
@@ -841,16 +948,22 @@ if st.session_state.last_sources:
                 f"- [{source['title']}]({source['url']})"
             )
 
+if st.session_state.last_model_used:
+    st.caption(
+        "النموذج المستخدم في آخر إجابة: "
+        + st.session_state.last_model_used
+    )
 
-# ==================================================
-# 16. إدخال السؤال والصورة
-# ==================================================
+
+# =========================================================
+# 15. إدخال السؤال والصورة
+# =========================================================
 
 with st.form("chat_form", clear_on_submit=True):
     user_text = st.text_area(
         "اكتب سؤالك",
         placeholder="اسأل عن أي موضوع...",
-        height=120,
+        height=115,
     )
 
     uploaded_image = st.file_uploader(
@@ -865,9 +978,9 @@ with st.form("chat_form", clear_on_submit=True):
     )
 
 
-# ==================================================
-# 17. معالجة الطلب
-# ==================================================
+# =========================================================
+# 16. تنفيذ الطلب
+# =========================================================
 
 if submitted:
     if not user_text.strip() and uploaded_image is None:
@@ -877,18 +990,17 @@ if submitted:
         question = user_text.strip()
 
         saved_question = question
-
         if uploaded_image is not None:
             saved_question = (
                 (question + "\n\n") if question else ""
             ) + "[أرفق المستخدم صورة]"
 
         try:
-            with st.spinner("جارٍ تجهيز الإجابة..."):
-                sources = []
-                used_search = False
-                model_used = ""
+            sources = []
+            model_used = ""
+            used_search = False
 
+            with st.spinner("جارٍ تحليل الطلب وتجهيز الإجابة..."):
                 if uploaded_image is not None:
                     answer, model_used = analyze_image(
                         question,
@@ -903,14 +1015,24 @@ if submitted:
                     used_search = True
 
                 else:
-                    answer = call_chat(
+                    answer, model_used = call_chat(
                         question,
                         enable_code=enable_code,
                     )
-                    model_used = st.session_state.selected_chat_model
 
-            if not answer.strip():
-                answer = "لم يرجع النموذج إجابة نصية. حاول مرة أخرى."
+                if not answer.strip():
+                    answer = (
+                        "لم يرجع النموذج إجابة نصية. "
+                        "جرّب إعادة صياغة السؤال."
+                    )
+
+                if enable_review and uploaded_image is None:
+                    with st.spinner("تتم مراجعة الإجابة..."):
+                        answer = review_answer(
+                            question,
+                            answer,
+                            model_used,
+                        )
 
             st.session_state.messages.append({
                 "role": "user",
@@ -923,22 +1045,22 @@ if submitted:
             })
 
             st.session_state.last_sources = sources
-            st.session_state.last_search_used = used_search
-
             st.session_state.last_model_used = model_used
 
             st.rerun()
 
-        except Exception as e:
+        except Exception as error:
             st.error(
-                "تعذر إكمال الطلب. تحقق من النموذج المختار "
-                "ومفتاح API وحدود الاستخدام."
+                "تعذر إكمال الطلب. قد يكون السبب نموذجًا غير متاح، "
+                "أو أداة غير مدعومة، أو مشكلة في مفتاح API "
+                "أو حدود الاستخدام."
             )
 
             with st.expander("تفاصيل الخطأ"):
-                st.code(str(e))
+                st.code(str(error))
 
             st.info(
-                "إذا كان الخطأ متعلقًا بأداة البحث أو تشغيل الكود، "
-                "جرّب تعطيل الأداة ثم أعد الطلب."
+                "جرّب تعطيل أدوات البحث وتشغيل الكود والمراجعة "
+                "ثم أعد السؤال. لا تشارك تفاصيل الخطأ إذا كانت "
+                "تحتوي على معلومات سرية."
             )
