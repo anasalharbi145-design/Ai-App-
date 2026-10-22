@@ -4,15 +4,17 @@ import io
 import json
 import base64
 import re
-import urllib.request
-import urllib.parse
-import difflib
 from datetime import datetime
 
 import streamlit as st
 import streamlit.components.v1 as components
 from PIL import Image
 from groq import Groq
+
+from reference_checker import (
+    verify_reference,
+    display_reference_result,
+)
 
 
 # =========================================================
@@ -334,222 +336,7 @@ def make_messages(user_text, include_user=True):
 
 
 # =========================================================
-# 6. التحقق المستقل من المراجع عبر Crossref
-# =========================================================
-
-def http_json(url):
-    """
-    طلب HTTP باستخدام مكتبات Python القياسية.
-    لا يحتاج إلى مفتاح API.
-    """
-    request = urllib.request.Request(
-        url,
-        headers={
-            "User-Agent": "SmartAssistantReferenceChecker/1.0",
-            "Accept": "application/json",
-        },
-    )
-
-    with urllib.request.urlopen(request, timeout=15) as response:
-        raw = response.read().decode("utf-8")
-
-    return json.loads(raw)
-
-
-def normalize_text(value):
-    value = str(value or "").lower()
-    value = re.sub(r"[^a-z0-9]+", " ", value)
-    return " ".join(value.split())
-
-
-def crossref_record(record):
-    titles = record.get("title") or []
-    authors = record.get("author") or []
-    container = record.get("container-title") or []
-    published = (
-        record.get("published-print")
-        or record.get("published-online")
-        or record.get("issued")
-        or {}
-    )
-
-    date_parts = (
-        published.get("date-parts", [[None]])[0]
-        if isinstance(published, dict)
-        else [None]
-    )
-
-    year = date_parts[0] if date_parts else None
-
-    author_names = []
-    for author in authors:
-        given = author.get("given", "")
-        family = author.get("family", "")
-        name = " ".join(x for x in [given, family] if x)
-        if name:
-            author_names.append(name)
-
-    doi = record.get("DOI", "")
-    url = (
-        "https://doi.org/" + doi
-        if doi
-        else record.get("URL", "")
-    )
-
-    return {
-        "title": titles[0] if titles else "(لا يوجد عنوان مسجل)",
-        "authors": author_names,
-        "year": year,
-        "journal": container[0] if container else "(غير متوفر)",
-        "doi": doi,
-        "url": url,
-        "type": record.get("type", ""),
-    }
-
-
-def get_doi(text):
-    text = text.strip()
-
-    match = re.search(
-        r"(?:https?://(?:dx\.)?doi\.org/|doi:\s*)"
-        r"(10\.\d{4,9}/[^\s\"<>]+)",
-        text,
-        flags=re.I,
-    )
-
-    if not match and re.fullmatch(
-        r"10\.\d{4,9}/[^\s]+",
-        text,
-        flags=re.I,
-    ):
-        return text
-
-    if match:
-        return match.group(1).rstrip(".,;)]}")
-
-    return None
-
-
-def verify_reference(query):
-    """
-    يتحقق من وجود سجل مطابق في Crossref.
-    لا يتحقق تلقائيًا من أن الدراسة تدعم الادعاء العلمي.
-    """
-    query = query.strip()
-
-    if not query:
-        raise ValueError("اكتب عنوان الدراسة أو DOI أو رابط DOI.")
-
-    doi = get_doi(query)
-
-    if doi:
-        encoded_doi = urllib.parse.quote(doi, safe="/")
-        url = "https://api.crossref.org/works/" + encoded_doi
-        data = http_json(url)
-
-        record = data.get("message")
-        if not isinstance(record, dict):
-            raise ValueError("لم يرجع Crossref سجلًا صالحًا.")
-
-        result = crossref_record(record)
-        result["match_score"] = 1.0
-        result["verification_type"] = "DOI"
-        return [result]
-
-    params = urllib.parse.urlencode({
-        "query.bibliographic": query,
-        "rows": 5,
-        "select": (
-            "DOI,title,author,published-print,published-online,"
-            "issued,container-title,URL,type"
-        ),
-    })
-
-    data = http_json(
-        "https://api.crossref.org/works?" + params
-    )
-
-    items = data.get("message", {}).get("items", [])
-    results = []
-
-    query_norm = normalize_text(query)
-
-    for item in items:
-        result = crossref_record(item)
-        title_norm = normalize_text(result["title"])
-
-        if title_norm and query_norm:
-            score = difflib.SequenceMatcher(
-                None,
-                query_norm,
-                title_norm,
-            ).ratio()
-        else:
-            score = 0.0
-
-        result["match_score"] = score
-        result["verification_type"] = "بحث عنوان/مرجع"
-        results.append(result)
-
-    return sorted(
-        results,
-        key=lambda x: x["match_score"],
-        reverse=True,
-    )
-
-
-def display_reference_result(result):
-    score = result["match_score"]
-
-    if result["verification_type"] == "DOI":
-        st.success("عُثر على سجل لهذا الـ DOI في Crossref.")
-    elif score >= 0.85:
-        st.success(
-            f"تطابق العنوان مرتفع نسبيًا: {score:.0%}. "
-            "تحقق من بقية البيانات."
-        )
-    elif score >= 0.60:
-        st.warning(
-            f"تطابق جزئي: {score:.0%}. "
-            "قد يكون هذا مرجعًا مختلفًا."
-        )
-    else:
-        st.warning(
-            f"التطابق ضعيف: {score:.0%}. "
-            "لا تعتبر هذا المرجع مطابقًا دون فحص يدوي."
-        )
-
-    st.markdown("**العنوان المسجل:** " + result["title"])
-
-    authors = result["authors"]
-    if authors:
-        shown_authors = ", ".join(authors[:8])
-        if len(authors) > 8:
-            shown_authors += " وآخرون"
-        st.write("**المؤلفون:** " + shown_authors)
-    else:
-        st.write("**المؤلفون:** غير متوفرين في السجل")
-
-    st.write("**السنة:** " + str(result["year"] or "غير متوفرة"))
-    st.write("**المجلة/المنشور:** " + result["journal"])
-    st.write("**نوع السجل:** " + str(result["type"] or "غير محدد"))
-
-    if result["doi"]:
-        st.write("**DOI:** " + result["doi"])
-
-    if result["url"]:
-        st.markdown(
-            f"[فتح سجل المصدر]({result['url']})"
-        )
-
-    st.caption(
-        "هذا الفحص يطابق بيانات السجل الببليوغرافي فقط؛ "
-        "لا يثبت أن المصدر يدعم الادعاء العلمي."
-    )
-
-
-# =========================================================
-# 7. أداة الاستجابة من Groq
+# 6. أداة الاستجابة من Groq
 # =========================================================
 
 def completion_text(response):
@@ -703,7 +490,7 @@ def research_with_web(user_text, enable_code=False):
 
 
 # =========================================================
-# 8. تحليل الصور
+# 7. تحليل الصور
 # =========================================================
 
 def image_to_data_url(image_file):
@@ -762,7 +549,7 @@ def analyze_image(user_text, image_file):
 
 
 # =========================================================
-# 9. مراجعة الإجابة اختياريًا
+# 8. مراجعة الإجابة اختياريًا
 # =========================================================
 
 def review_answer(question, answer, model):
@@ -796,7 +583,7 @@ def review_answer(question, answer, model):
 
 
 # =========================================================
-# 10. زر النسخ
+# 9. زر النسخ
 # =========================================================
 
 def render_copy_button(text, button_id):
@@ -867,7 +654,7 @@ def render_copy_button(text, button_id):
 
 
 # =========================================================
-# 11. الشريط الجانبي
+# 10. الشريط الجانبي
 # =========================================================
 
 with st.sidebar:
@@ -916,7 +703,7 @@ with st.sidebar:
     )
 
     # -----------------------------------------------
-    # التحقق المستقل من المرجع
+    # التحقق المستقل من المرجع - من الملف الخارجي
     # -----------------------------------------------
 
     st.divider()
@@ -954,7 +741,7 @@ with st.sidebar:
                         f"النتيجة {index + 1}: {result['title']}",
                         expanded=(index == 0),
                     ):
-                        display_reference_result(result)
+                        display_reference_result(result, st)
 
         except Exception as error:
             st.error(
@@ -1025,7 +812,7 @@ with st.sidebar:
 
 
 # =========================================================
-# 12. واجهة المساعد
+# 11. واجهة المساعد
 # =========================================================
 
 st.title("🤖 المساعد الذكي الشامل")
@@ -1070,7 +857,7 @@ if st.session_state.last_model_used:
 
 
 # =========================================================
-# 13. إدخال السؤال والصورة
+# 12. إدخال السؤال والصورة
 # =========================================================
 
 with st.form("chat_form", clear_on_submit=True):
@@ -1093,7 +880,7 @@ with st.form("chat_form", clear_on_submit=True):
 
 
 # =========================================================
-# 14. تنفيذ الطلب
+# 13. تنفيذ الطلب
 # =========================================================
 
 if submitted:
