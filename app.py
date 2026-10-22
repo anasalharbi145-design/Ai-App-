@@ -13,6 +13,15 @@ from reference_checker import (
     verify_reference,
     display_reference_result,
 )
+from claim_checker import (
+    FOOTER_MARK,
+    VERDICTS,
+    audit_answer,
+    complete as groq_complete,
+    executed_tool_names,
+    message_dict,
+    urls_from_message,
+)
 
 
 # =====================================================
@@ -46,6 +55,7 @@ VISION_PREFERENCES = [
     "meta-llama/llama-4-maverick-17b-128e-instruct",
 ]
 
+# البحث وتشغيل الكود المدمجان مدعومان في وثائق Groq لهذين النموذجين فقط.
 TOOL_MODEL_PREFERENCES = [
     "openai/gpt-oss-120b",
     "openai/gpt-oss-20b",
@@ -92,17 +102,24 @@ SYSTEM_PROMPT = """
 - صرّح بعدم اليقين بدل اختراع إجابة.
 """
 
+# يُستخدم فقط عند تفعيل أداة البحث فعلًا.
 RESEARCH_PROMPT = """
-وضع البحث والتحقق:
-استخدم أداة البحث المدمجة فقط إذا كانت مدعومة فعلًا.
+وضع البحث:
+استخدم أداة البحث لهذا الطلب.
 افحص الادعاءات الأساسية كلًا على حدة.
 فضّل المصادر الأصلية والرسمية والدراسات المحكمة.
-استخدم الروابط التي ترجعها أداة البحث فعلًا.
+اذكر فقط الروابط التي ظهرت فعلًا في نتائج البحث.
 لا تخترع روابط أو مراجع.
 وجود الرابط لا يثبت أن محتواه يدعم الادعاء.
 إذا لم تتمكن من فحص محتوى مصدر، فصرّح بذلك.
 إذا لم تكف الأدلة، فقل إن الادعاء غير محسوم.
 افصل بين صحة الفكرة وصحة تفاصيل المرجع.
+"""
+
+CODE_PROMPT = """
+وضع الحساب والبرمجة:
+استخدم أداة تشغيل الكود لأي حساب أو تحقق عددي بدل الحساب الذهني.
+اعرض النتيجة التي أرجعتها الأداة فعلًا، ولا تدّع تشغيل كود لم يُشغَّل.
 """
 
 MODES = {
@@ -112,7 +129,10 @@ MODES = {
 اعرض النتائج والأسباب المهمة دون عرض سلسلة التفكير الداخلية.
 لا تطل إذا كانت المسألة بسيطة.
 """,
-    "بحث وتحقق": RESEARCH_PROMPT,
+    "بحث وتحقق": """
+افحص الادعاءات الأساسية كلًا على حدة وميّز المؤكد من غير المؤكد.
+لا تدّع أنك بحثت في الإنترنت؛ البحث لا يتم إلا إذا فُعّل من الشريط الجانبي.
+""",
     "معلّم خطوة بخطوة": """
 اشرح الفكرة من الأساس إلى التطبيق.
 استخدم خطوات واضحة وأمثلة عند الحاجة.
@@ -279,6 +299,7 @@ DEFAULTS = {
     "last_model_used": "",
     "selected_chat_model": chat_options[0],
     "selected_mode": "متوازن",
+    "audit_results": [],
 }
 
 for key, value in DEFAULTS.items():
@@ -292,6 +313,11 @@ if st.session_state.selected_mode not in MODES:
     st.session_state.selected_mode = "متوازن"
 
 
+def strip_footer(text):
+    """يفصل التنبيهات الملحقة بالإجابة عن نصها."""
+    return text.split(FOOTER_MARK)[0]
+
+
 def build_history():
     history = []
 
@@ -303,7 +329,7 @@ def build_history():
         ):
             history.append({
                 "role": item["role"],
-                "content": item["content"],
+                "content": strip_footer(item["content"]),
             })
 
     while history and history[0]["role"] == "assistant":
@@ -387,204 +413,107 @@ def call_chat(user_text):
 
 
 # =====================================================
-# 6. البحث وتشغيل الكود
+# 6. البحث وتشغيل الكود (chat.completions عبر مكتبة groq)
 # =====================================================
 
-def get_response_text(response):
+def research_with_web(user_text, use_search=True, use_code=False):
     """
-    محاولة قراءة مخرجات Responses API بأكثر من شكل.
-    تختلف بنية الاستجابة بحسب إصدار SDK.
-    """
-    output_text = getattr(response, "output_text", None)
-
-    if isinstance(output_text, str) and output_text.strip():
-        return output_text
-
-    try:
-        data = response.model_dump()
-    except Exception:
-        try:
-            data = dict(response)
-        except Exception:
-            data = {}
-
-    pieces = []
-
-    for item in data.get("output", []) or []:
-        if not isinstance(item, dict):
-            continue
-
-        for content in item.get("content", []) or []:
-            if not isinstance(content, dict):
-                continue
-
-            text_value = content.get("text")
-
-            if isinstance(text_value, str) and text_value.strip():
-                pieces.append(text_value)
-
-    return "\n\n".join(pieces).strip()
-
-
-def collect_urls(value):
-    found = []
-
-    def walk(item):
-        if isinstance(item, dict):
-            title = (
-                item.get("title")
-                or item.get("name")
-                or item.get("source_title")
-                or ""
-            )
-
-            for key in ("url", "uri", "href", "link"):
-                link = item.get(key)
-
-                if isinstance(link, dict):
-                    link = link.get("url") or link.get("uri")
-
-                if (
-                    isinstance(link, str)
-                    and re.match(r"^https?://", link, re.I)
-                ):
-                    found.append({
-                        "title": str(title or link),
-                        "url": link.strip().rstrip(".,;)]}"),
-                    })
-
-            for child in item.values():
-                walk(child)
-
-        elif isinstance(item, list):
-            for child in item:
-                walk(child)
-
-        elif isinstance(item, str):
-            for link in re.findall(
-                r"https?://[^\s<>\"']+",
-                item,
-                flags=re.I,
-            ):
-                found.append({
-                    "title": link,
-                    "url": link.rstrip(".,;)]}"),
-                })
-
-    walk(value)
-
-    unique = []
-    seen = set()
-
-    for source in found:
-        if source["url"] not in seen:
-            seen.add(source["url"])
-            unique.append(source)
-
-    return unique[:20]
-
-
-def research_with_web(user_text, enable_code=False):
-    """
-    يستخدم Responses API وأدوات Groq المدمجة.
-    إذا لم تكن الواجهة أو الأداة مدعومة، يُظهر الخطأ بدل ادعاء نجاح البحث.
+    يستخدم أدوات Groq المدمجة (browser_search / code_interpreter)
+    عبر chat.completions، وهي مدعومة في وثائق Groq لنماذج gpt-oss فقط.
+    يرجع: (الإجابة، الروابط، النموذج، هل نُفِّذت أداة فعلًا)
     """
     model = st.session_state.selected_chat_model
 
     if model not in tool_options:
         if not tool_options:
             raise RuntimeError(
-                "لم يظهر نموذج معروف في قائمة التطبيق لأدوات البحث. "
-                "عطّل البحث أو راجع النماذج المدعومة في Groq."
+                "لا يظهر نموذج gpt-oss في حسابك، وهو النموذج المدعوم "
+                "للبحث وتشغيل الكود. عطّل الأداة أو راجع حسابك في Groq."
             )
+
         model = tool_options[0]
 
-    if not hasattr(client, "responses"):
-        raise RuntimeError(
-            "إصدار مكتبة Groq الحالي لا يعرض Responses API. "
-            "حدّث groq في requirements.txt ثم أعد نشر التطبيق."
-        )
+    tools = []
+    extra = []
 
-    tools = [{"type": "browser_search"}]
+    if use_search:
+        tools.append({"type": "browser_search"})
+        extra.append(RESEARCH_PROMPT)
 
-    if enable_code:
+    if use_code:
         tools.append({"type": "code_interpreter"})
+        extra.append(CODE_PROMPT)
 
-    # نحول سجل المحادثة إلى إدخال نصي لتقليل اختلاف تنسيقات SDK.
-    history = build_history()
-    conversation = []
-
-    for item in history:
-        role = item["role"].upper()
-        conversation.append(
-            role + ":\n" + item["content"]
-        )
-
-    conversation.append("USER:\n" + user_text)
-
-    input_text = (
-        SYSTEM_PROMPT
-        + "\n\n"
-        + MODES.get(
-            st.session_state.selected_mode,
-            MODES["متوازن"],
-        )
-        + "\n\n"
-        + RESEARCH_PROMPT
-        + "\n\n"
-        + "\n\n".join(conversation)
+    messages = make_messages(
+        user_text,
+        extra_system="\n\n".join(extra),
     )
 
-    response = client.responses.create(
-        model=model,
-        input=input_text,
+    response = groq_complete(
+        client,
+        model,
+        messages,
         tools=tools,
+        tool_choice="required" if use_search else "auto",
+        max_tokens=MAX_TOKENS,
+        effort="low" if use_search else None,
     )
 
-    answer = get_response_text(response)
+    answer = completion_text(response)
 
-    try:
-        response_data = response.model_dump()
-    except Exception:
-        response_data = {}
+    data = message_dict(response)
+    tool_names = executed_tool_names(data)
+    found_urls = urls_from_message(data)
 
-    sources = collect_urls(response_data)
-    sources.extend(collect_urls(answer))
+    sources = [
+        {"title": item["title"], "url": item["url"]}
+        for item in found_urls
+        if item["from_tool"]
+    ][:20]
 
-    unique_sources = []
-    seen = set()
-
-    for source in sources:
-        if source["url"] not in seen:
-            seen.add(source["url"])
-            unique_sources.append(source)
+    text_only_urls = [
+        item for item in found_urls if not item["from_tool"]
+    ]
 
     if not answer.strip():
-        answer = "لم ترجع أداة البحث إجابة نصية."
+        answer = "لم يرجع النموذج إجابة نصية."
 
-    if not unique_sources:
-        answer += (
-            "\n\n**تنبيه:** لم أستطع استخراج روابط مباشرة من الاستجابة. "
-            "هذا لا يعني أن الإجابة خاطئة، لكن التوثيق يحتاج إلى فحص إضافي."
+    notes = []
+
+    if tool_names:
+        notes.append(
+            "✅ نُفِّذت أداة مدمجة في Groq: "
+            + "، ".join(sorted(set(tool_names)))
+            + f" ({len(tool_names)} استدعاء)."
         )
     else:
-        answer += (
-            "\n\n**تنبيه توثيق:** الروابط المستخرجة ظهرت في الاستجابة، "
-            "لكن التطبيق لا يفتح كل صفحة ويفحص محتواها بشكل مستقل. "
-            "تحقق من أن المصدر يدعم الادعاء قبل الاعتماد عليه."
+        notes.append(
+            "⚠️ لم تسجّل الاستجابة تنفيذ أي أداة، فالإجابة من معرفة "
+            "النموذج المخزنة وليست من بحث أو تشغيل فعلي."
         )
 
-    return answer, unique_sources, model
+    if use_search:
+        if sources:
+            notes.append(
+                "🔗 الروابط في القائمة أسفل المحادثة ظهرت في نتائج "
+                "البحث، لكن التطبيق لم يفتح صفحاتها. استخدم «تدقيق "
+                "ادعاءات آخر إجابة» في الشريط الجانبي لفحصها."
+            )
+        else:
+            notes.append(
+                "لم أستطع استخراج روابط من نتائج البحث؛ "
+                "التوثيق يحتاج فحصًا يدويًا."
+            )
 
+        if text_only_urls:
+            notes.append(
+                "ذكر النموذج في نصه روابط لم تظهر في نتائج البحث؛ "
+                "اعتبرها غير موثقة حتى تفتحها وتتأكد منها."
+            )
 
-def run_code_request(user_text):
-    # تشغيل الكود يعتمد على أداة Groq المدمجة؛ لا ندّعي تنفيذًا محليًا.
-    answer, sources, model = research_with_web(
-        user_text,
-        enable_code=True,
-    )
+    answer += FOOTER_MARK + "\n\n".join(notes)
 
-    return answer, model
+    return answer, sources, model, bool(tool_names)
 
 
 # =====================================================
@@ -668,7 +597,7 @@ def analyze_image(user_text, image_file):
 
 
 # =====================================================
-# 8. مراجعة إضافية للإجابة
+# 8. مراجعة إضافية للإجابة (للإجابات بلا أدوات فقط)
 # =====================================================
 
 def review_answer(question, answer, model):
@@ -775,7 +704,74 @@ def render_copy_button(text, button_id):
 
 
 # =====================================================
-# 10. الشريط الجانبي
+# 10. عرض نتائج تدقيق الادعاءات
+# =====================================================
+
+def safe_md(text, limit=300):
+    text = " ".join(str(text or "").split())
+    return text.replace("[", "(").replace("]", ")")[:limit]
+
+
+def render_audit(results):
+    st.subheader("🔬 نتيجة تدقيق الادعاءات")
+
+    st.warning(
+        "هذا فحص آلي وليس ضمانًا. جلبت الشيفرة الصفحات فعليًا وتحققت "
+        "من أن الاقتباس يطابق نص الصفحة حرفيًا، لكن فهم النموذج لمعنى "
+        "المصدر قد يخطئ. افتح المصدر قبل الاعتماد عليه."
+    )
+
+    for number, item in enumerate(results, start=1):
+        icon, label = VERDICTS.get(item["verdict"], VERDICTS["undecided"])
+        st.markdown(f"{icon} **{number}.** {safe_md(item['claim'], 120)}")
+
+    for number, item in enumerate(results, start=1):
+        icon, label = VERDICTS.get(item["verdict"], VERDICTS["undecided"])
+
+        with st.expander(f"{icon} الادعاء {number}: {label}"):
+            st.write(item["claim"])
+
+            if item.get("reason"):
+                st.write("**السبب:** " + item["reason"])
+
+            if item.get("quote"):
+                st.markdown("**الاقتباس من المصدر:**")
+                st.markdown("> " + safe_md(item["quote"], 600))
+
+                if item.get("quote_verified"):
+                    st.caption("✓ طابق الاقتباس نص الصفحة المجلوبة.")
+
+            if item.get("source_url"):
+                st.markdown(
+                    f"[{safe_md(item.get('source_title') or 'المصدر')}]"
+                    f"({item['source_url']})"
+                )
+
+            if item["verdict"] == "unsupported":
+                st.caption(
+                    "«غير مدعوم» تعني أن المقاطع المفحوصة لا تتناول "
+                    "الادعاء؛ لا تعني أنه خاطئ."
+                )
+
+            if item.get("sources"):
+                st.caption("الصفحات التي حاولت فحصها:")
+
+                for source in item["sources"]:
+                    origin = (
+                        "من نتائج البحث"
+                        if source.get("from_tool")
+                        else "ذكرها النموذج في نصه"
+                    )
+                    st.markdown(
+                        f"- {safe_md(source.get('title'), 80)} — "
+                        f"{source.get('status', '')} "
+                        f"({origin}؛ {source.get('hint', '')}) "
+                        f"{source['url']}"
+                    )
+
+
+# =====================================================
+# 11. الشريط الجانبي
 # =====================================================
 
 with st.sidebar:
@@ -805,23 +801,85 @@ with st.sidebar:
     st.divider()
     st.subheader("🧰 الأدوات")
 
+    if tool_options:
+        st.caption(
+            "البحث وتشغيل الكود يعملان على: " + "، ".join(tool_options)
+        )
+    else:
+        st.warning(
+            "لا يظهر نموذج gpt-oss في حسابك؛ "
+            "البحث وتشغيل الكود غير متاحين."
+        )
+
     enable_web_search = st.toggle(
         "🔎 البحث في الإنترنت",
         value=False,
-        help="يتطلب دعم Responses API وأداة البحث في حساب Groq.",
+        help="أداة browser_search المدمجة في Groq (نماذج gpt-oss).",
     )
 
     enable_code = st.toggle(
         "🧮 تشغيل الكود والحسابات",
         value=False,
-        help="يعتمد على دعم أداة code_interpreter من Groq.",
+        help="أداة code_interpreter المدمجة في Groq (نماذج gpt-oss).",
     )
 
     enable_review = st.toggle(
         "🛡️ مراجعة إضافية للإجابة",
         value=False,
-        help="تستهلك طلبًا إضافيًا ولا تضمن خلو الإجابة من الأخطاء.",
+        help=(
+            "طلب إضافي يراجع فيه النموذج إجابته من معرفته، ولا يضمن "
+            "خلوها من الأخطاء. لا تُطبَّق على إجابات البحث أو الكود."
+        ),
     )
+
+    st.divider()
+    st.subheader("🔬 تدقيق ادعاءات آخر إجابة")
+
+    st.caption(
+        "يستخرج الادعاءات، يبحث عن مصادر، يجلب الصفحات فعليًا، ويقارن "
+        "المصدر بالادعاء. يستهلك عدة طلبات (حتى 5 ادعاءات). "
+        "فحص آلي وليس ضمانًا."
+    )
+
+    last_answer = ""
+
+    for item in reversed(st.session_state.messages):
+        if item["role"] == "assistant":
+            last_answer = strip_footer(item["content"])
+            break
+
+    audit_clicked = st.button(
+        "دقّق آخر إجابة",
+        use_container_width=True,
+        disabled=(not last_answer) or (not tool_options),
+    )
+
+    if audit_clicked:
+        progress_slot = st.empty()
+
+        def show_progress(index, total, text):
+            progress_slot.caption(
+                f"جارٍ فحص الادعاء {index} من {total}..."
+            )
+
+        try:
+            with st.spinner("جارٍ تدقيق الادعاءات (قد يستغرق دقائق)..."):
+                st.session_state.audit_results = audit_answer(
+                    client,
+                    tool_options[0],
+                    last_answer,
+                    progress=show_progress,
+                )
+
+            progress_slot.empty()
+
+            if not st.session_state.audit_results:
+                st.info("لم أجد في الإجابة ادعاءات واقعية قابلة للفحص.")
+
+        except Exception as error:
+            progress_slot.empty()
+            st.error("تعذر تدقيق الإجابة.")
+            st.caption(str(error))
 
     st.divider()
     st.subheader("📚 التحقق من مرجع علمي")
@@ -837,6 +895,11 @@ with st.sidebar:
             placeholder="مثال: 10.xxxx/xxxxx",
         )
 
+        reference_claimed = st.text_input(
+            "العنوان أو الاستشهاد الذي تدّعيه (عند إدخال DOI)",
+            placeholder="اكتب عنوان الدراسة كما ذُكر لك",
+        )
+
         verify_submitted = st.form_submit_button(
             "تحقق من المرجع",
             use_container_width=True,
@@ -845,12 +908,20 @@ with st.sidebar:
     if verify_submitted:
         try:
             with st.spinner("جارٍ البحث في Crossref..."):
-                results = verify_reference(reference_query)
+                outcome = verify_reference(
+                    reference_query,
+                    reference_claimed,
+                )
+
+            results = outcome["results"]
 
             if not results:
                 st.warning(
-                    "لم تظهر نتائج في Crossref. "
-                    "هذا لا يثبت أن المرجع مختلق."
+                    outcome["message"]
+                    or (
+                        "لم تظهر نتائج في Crossref. "
+                        "هذا لا يثبت أن المرجع مختلق."
+                    )
                 )
             else:
                 for index, result in enumerate(results):
@@ -913,6 +984,7 @@ with st.sidebar:
                 st.session_state.messages = valid_messages
                 st.session_state.last_sources = []
                 st.session_state.last_model_used = ""
+                st.session_state.audit_results = []
 
                 st.success("تمت استعادة سجل المحادثة.")
                 st.rerun()
@@ -926,11 +998,12 @@ with st.sidebar:
         st.session_state.messages = []
         st.session_state.last_sources = []
         st.session_state.last_model_used = ""
+        st.session_state.audit_results = []
         st.rerun()
 
 
 # =====================================================
-# 11. واجهة المساعد
+# 12. واجهة المساعد
 # =====================================================
 
 st.title("🤖 المساعد الذكي الشامل")
@@ -951,7 +1024,7 @@ for index, message in enumerate(st.session_state.messages):
 
         if message["role"] == "assistant":
             render_copy_button(
-                message["content"],
+                strip_footer(message["content"]),
                 f"history_{index}",
             )
 
@@ -964,7 +1037,7 @@ if st.session_state.last_sources:
 
         for source in st.session_state.last_sources:
             st.markdown(
-                f"- [{source['title']}]({source['url']})"
+                f"- [{safe_md(source['title'], 120)}]({source['url']})"
             )
 
 if st.session_state.last_model_used:
@@ -973,9 +1046,12 @@ if st.session_state.last_model_used:
         + st.session_state.last_model_used
     )
 
+if st.session_state.audit_results:
+    render_audit(st.session_state.audit_results)
+
 
 # =====================================================
-# 12. إدخال السؤال والصورة
+# 13. إدخال السؤال والصورة
 # =====================================================
 
 with st.form("chat_form", clear_on_submit=True):
@@ -998,7 +1074,7 @@ with st.form("chat_form", clear_on_submit=True):
 
 
 # =====================================================
-# 13. تنفيذ الطلب
+# 14. تنفيذ الطلب
 # =====================================================
 
 if submitted:
@@ -1017,6 +1093,7 @@ if submitted:
         try:
             sources = []
             model_used = ""
+            tools_ran = False
 
             with st.spinner("جارٍ تجهيز الإجابة..."):
                 if uploaded_image is not None:
@@ -1025,20 +1102,17 @@ if submitted:
                         uploaded_image,
                     )
 
-                elif enable_web_search and enable_code:
-                    answer, sources, model_used = research_with_web(
+                elif enable_web_search or enable_code:
+                    (
+                        answer,
+                        sources,
+                        model_used,
+                        tools_ran,
+                    ) = research_with_web(
                         question,
-                        enable_code=True,
+                        use_search=enable_web_search,
+                        use_code=enable_code,
                     )
-
-                elif enable_web_search:
-                    answer, sources, model_used = research_with_web(
-                        question,
-                        enable_code=False,
-                    )
-
-                elif enable_code:
-                    answer, model_used = run_code_request(question)
 
                 else:
                     answer, model_used = call_chat(question)
@@ -1049,12 +1123,25 @@ if submitted:
                         "حاول إعادة صياغة السؤال."
                     )
 
-                if enable_review and uploaded_image is None:
+                review_allowed = (
+                    enable_review
+                    and uploaded_image is None
+                    and not enable_web_search
+                    and not enable_code
+                    and not tools_ran
+                )
+
+                if review_allowed:
                     with st.spinner("جارٍ مراجعة الإجابة..."):
                         answer = review_answer(
                             question,
                             answer,
                             model_used,
+                        )
+                        answer += (
+                            FOOTER_MARK
+                            + "🛡️ مراجعة آلية من النموذج نفسه من معرفته "
+                            "المخزنة؛ ليست تحققًا بمصادر."
                         )
 
             st.session_state.messages.append({
@@ -1069,6 +1156,7 @@ if submitted:
 
             st.session_state.last_sources = sources
             st.session_state.last_model_used = model_used
+            st.session_state.audit_results = []
 
             st.rerun()
 
