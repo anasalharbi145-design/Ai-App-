@@ -1,14 +1,12 @@
-
 import os
 import io
 import json
 import base64
 import re
-from datetime import datetime
 
 import streamlit as st
 import streamlit.components.v1 as components
-from PIL import Image
+from PIL import Image, UnidentifiedImageError
 from groq import Groq
 
 from reference_checker import (
@@ -17,9 +15,9 @@ from reference_checker import (
 )
 
 
-# =========================================================
-# 1. الإعدادات
-# =========================================================
+# =====================================================
+# 1. إعدادات التطبيق
+# =====================================================
 
 st.set_page_config(
     page_title="المساعد الذكي",
@@ -44,6 +42,8 @@ CHAT_PREFERENCES = [
 VISION_PREFERENCES = [
     "qwen/qwen3.8-27b",
     "qwen/qwen3.6-27b",
+    "meta-llama/llama-4-scout-17b-16e-instruct",
+    "meta-llama/llama-4-maverick-17b-128e-instruct",
 ]
 
 TOOL_MODEL_PREFERENCES = [
@@ -51,51 +51,37 @@ TOOL_MODEL_PREFERENCES = [
     "openai/gpt-oss-20b",
 ]
 
-SEARCH_MODELS = set(TOOL_MODEL_PREFERENCES)
-CODE_MODELS = set(TOOL_MODEL_PREFERENCES)
-
-
-# =========================================================
-# 2. تعليمات المساعد
-# =========================================================
-
 SYSTEM_PROMPT = """
 أنت مساعد ذكاء اصطناعي عام متعدد المجالات.
 
-الأهداف:
-الإجابة بدقة، وحل المشكلات، وشرح المعلومات، والبحث والتحقق،
-والتعليم والبرمجة وتحليل الصور والبيانات.
-
 قواعد الدقة:
 1. لا تختلق حقائق أو أرقامًا أو دراسات أو مؤلفين أو روابط.
-2. لا تدّع أنك استخدمت أداة لم تستخدمها فعلًا.
+2. لا تدّع استخدام أداة لم تستخدمها فعلًا.
 3. ميّز بين الحقيقة والاستنتاج والفرضية والرأي.
 4. إذا لم تعرف، فقل ذلك بوضوح.
-5. لا تخلط بين عدم العثور على دليل وبين إثبات خطأ الادعاء.
-6. لا تعمم نتائج دراسة واحدة دون مبرر.
-7. لا تخلط بين الارتباط والسببية.
+5. عدم العثور على دليل لا يثبت أن الادعاء خاطئ.
+6. لا تخلط بين الارتباط والسببية.
+7. لا تعمم نتائج دراسة واحدة دون مبرر.
 8. لا توافق المستخدم لمجرد إرضائه.
-9. صحح أخطاءك السابقة إذا اكتشفتها.
+9. صحح الأخطاء عند اكتشافها.
 10. راجع الأرقام والوحدات والتواريخ والأسماء.
 
 قواعد المصادر:
-- اسم الدراسة أو وجود الرابط لا يثبت صحة الادعاء.
-- لا تختلق عنوانًا أو اسم مؤلف أو سنة أو اسم مجلة.
+- وجود مرجع لا يعني أن محتواه يدعم الادعاء.
+- لا تختلق عنوان دراسة أو مؤلفًا أو سنة أو رابطًا.
 - فرّق بين العثور على المصدر وفحص محتواه.
-- فرّق بين صحة المعلومة وصحة المرجع الذي استُشهد به.
-- لا تقل إن مرجعًا متحقق منه إلا إذا فُحصت بياناته فعلًا.
-- لا تقل إن دراسة تدعم ادعاءً إلا إذا توفر دليل على ذلك.
-- إذا تعذر التحقق، صرّح بذلك.
-- عند وجود تعارض بين الأدلة، اذكره.
+- لا تقل إن مصدرًا يدعم ادعاءً إلا إذا توفر دليل على ذلك.
+- وضح ما لم تتمكن من التحقق منه.
+- عند تعارض الأدلة، اذكر التعارض.
 - فضّل المصادر الأصلية والرسمية والدراسات المحكمة.
-- لا تعرض سلسلة التفكير الداخلية؛ قدم أسبابًا ونتائج قابلة للفحص.
+- لا تعرض سلسلة التفكير الداخلية؛ اعرض النتائج والأسباب المهمة.
 
-في تدقيق الحقائق، استخدم الأحكام:
+في تدقيق الحقائق استخدم:
 صحيح، صحيح جزئيًا، خاطئ، غير مدعوم، أو غير محسوم.
 
 في البرمجة:
 - لا تدّع تشغيل الكود دون تشغيله.
-- حافظ على الوظائف الموجودة عند تعديل مشروع.
+- حافظ على وظائف المشروع عند تعديله.
 - لا تكشف مفاتيح API.
 - وضّح ما لم يتم اختباره.
 
@@ -108,35 +94,36 @@ SYSTEM_PROMPT = """
 
 RESEARCH_PROMPT = """
 وضع البحث والتحقق:
-استخدم أداة البحث المتاحة إن كانت مدعومة.
+استخدم أداة البحث المدمجة فقط إذا كانت مدعومة فعلًا.
 افحص الادعاءات الأساسية كلًا على حدة.
-فضّل المصادر الأصلية والدراسات المحكمة.
-اعرض الروابط الفعلية التي توفرها الأداة.
-لا تختلق أسماء دراسات أو مؤلفين أو روابط.
-لا تعتبر وجود الرابط دليلًا على صحة الادعاء.
-إذا لم تفحص محتوى المصدر، فصرّح بذلك.
-إذا لم تكف الأدلة، فقل إن الادعاء غير متحقق.
+فضّل المصادر الأصلية والرسمية والدراسات المحكمة.
+استخدم الروابط التي ترجعها أداة البحث فعلًا.
+لا تخترع روابط أو مراجع.
+وجود الرابط لا يثبت أن محتواه يدعم الادعاء.
+إذا لم تتمكن من فحص محتوى مصدر، فصرّح بذلك.
+إذا لم تكف الأدلة، فقل إن الادعاء غير محسوم.
 افصل بين صحة الفكرة وصحة تفاصيل المرجع.
 """
 
 MODES = {
     "متوازن": "أجب بوضوح ودقة وباختصار مناسب.",
     "تحليل عميق": """
-حلل المشكلة بعناية. افحص الافتراضات والبدائل والتناقضات
-والقيود. اعرض النتائج والأسباب المهمة دون عرض سلسلة التفكير
-الداخلية. لا تطل إذا كانت المسألة بسيطة.
+حلل الافتراضات والبدائل والتناقضات والقيود.
+اعرض النتائج والأسباب المهمة دون عرض سلسلة التفكير الداخلية.
+لا تطل إذا كانت المسألة بسيطة.
 """,
     "بحث وتحقق": RESEARCH_PROMPT,
     "معلّم خطوة بخطوة": """
-اشرح الفكرة من الأساس إلى التطبيق. استخدم خطوات واضحة
-وأمثلة عند الحاجة. لا تفترض أن المستخدم يعرف المصطلحات.
+اشرح الفكرة من الأساس إلى التطبيق.
+استخدم خطوات واضحة وأمثلة عند الحاجة.
+لا تفترض أن المستخدم يعرف المصطلحات.
 """,
 }
 
 
-# =========================================================
-# 3. تصميم الواجهة
-# =========================================================
+# =====================================================
+# 2. تصميم الواجهة
+# =====================================================
 
 st.markdown(
     """
@@ -176,17 +163,9 @@ st.markdown(
         font-weight: 600;
     }
 
-    [data-testid="stFileUploader"] {
-        color: #ffffff;
-    }
-
     [data-testid="stExpander"] {
         border: 1px solid #414249;
         border-radius: 12px;
-    }
-
-    [data-testid="stChatMessage"] {
-        border-radius: 14px;
     }
 
     a {
@@ -208,12 +187,13 @@ st.markdown(
 )
 
 
-# =========================================================
-# 4. Groq
-# =========================================================
+# =====================================================
+# 3. الاتصال بـ Groq
+# =====================================================
 
 def get_secret(name):
     value = os.getenv(name, "")
+
     if value:
         return value
 
@@ -245,34 +225,53 @@ try:
     available_models = get_available_models()
 except Exception:
     st.error(
-        "تعذر جلب النماذج من Groq. تحقق من المفتاح "
-        "والاتصال وحالة حسابك."
+        "تعذر جلب النماذج من Groq. "
+        "تحقق من المفتاح والاتصال وحالة حسابك."
     )
     st.stop()
 
 
-def available_preferences(preferences):
-    return [m for m in preferences if m in available_models]
+def filter_available(preferences):
+    return [
+        model
+        for model in preferences
+        if model in available_models
+    ]
 
 
-chat_options = available_preferences(CHAT_PREFERENCES)
-vision_options = available_preferences(VISION_PREFERENCES)
-tool_options = available_preferences(TOOL_MODEL_PREFERENCES)
+chat_options = filter_available(CHAT_PREFERENCES)
+vision_options = filter_available(VISION_PREFERENCES)
+tool_options = filter_available(TOOL_MODEL_PREFERENCES)
 
-search_options = [m for m in tool_options if m in SEARCH_MODELS]
-code_options = [m for m in tool_options if m in CODE_MODELS]
+if not chat_options:
+    exclusions = (
+        "whisper",
+        "guard",
+        "speech",
+        "embedding",
+        "transcription",
+    )
+
+    chat_options = [
+        model
+        for model in available_models
+        if not any(word in model.lower() for word in exclusions)
+    ]
 
 if not chat_options:
     st.error(
-        "لم يظهر نموذج دردشة من قائمة الاختيارات. "
-        "راجع النماذج المتاحة في حساب Groq."
+        "لم يظهر نموذج دردشة مناسب في حساب Groq الحالي."
     )
     st.stop()
 
+if not vision_options:
+    # لا نفترض أن نموذج النص يدعم الصور.
+    vision_options = []
 
-# =========================================================
-# 5. حالة الجلسة
-# =========================================================
+
+# =====================================================
+# 4. حالة الجلسة والمحادثات
+# =====================================================
 
 DEFAULTS = {
     "messages": [],
@@ -313,20 +312,29 @@ def build_history():
     return history
 
 
-def make_messages(user_text, include_user=True):
+def make_messages(
+    user_text=None,
+    include_user=True,
+    extra_system="",
+):
     mode_prompt = MODES.get(
         st.session_state.selected_mode,
         MODES["متوازن"],
     )
 
+    system_text = SYSTEM_PROMPT + "\n\n" + mode_prompt
+
+    if extra_system:
+        system_text += "\n\n" + extra_system
+
     messages = [{
         "role": "system",
-        "content": SYSTEM_PROMPT + "\n\n" + mode_prompt,
+        "content": system_text,
     }]
 
     messages.extend(build_history())
 
-    if include_user:
+    if include_user and user_text is not None:
         messages.append({
             "role": "user",
             "content": user_text,
@@ -335,102 +343,135 @@ def make_messages(user_text, include_user=True):
     return messages
 
 
-# =========================================================
-# 6. أداة الاستجابة من Groq
-# =========================================================
+# =====================================================
+# 5. الدردشة العادية
+# =====================================================
 
 def completion_text(response):
     try:
-        return response.choices[0].message.content or ""
-    except Exception:
+        content = response.choices[0].message.content
+
+        if isinstance(content, str):
+            return content
+
+        return str(content or "")
+    except (AttributeError, IndexError, TypeError):
         return ""
 
 
-def call_completion(model, messages, tools=None, tool_choice=None):
-    kwargs = {
-        "model": model,
-        "messages": messages,
-        "temperature": 0.2,
-        "max_tokens": MAX_TOKENS,
-    }
-
-    if tools:
-        kwargs["tools"] = tools
-
-    if tool_choice:
-        kwargs["tool_choice"] = tool_choice
-
-    return client.chat.completions.create(**kwargs)
-
-
-def call_chat(user_text, enable_code=False):
-    model = st.session_state.selected_chat_model
-    tools = None
-
-    if enable_code:
-        if model in CODE_MODELS:
-            tools = [{"type": "code_interpreter"}]
-        elif code_options:
-            model = code_options[0]
-            tools = [{"type": "code_interpreter"}]
-
-    response = call_completion(
+def call_completion(model, messages):
+    return client.chat.completions.create(
         model=model,
-        messages=make_messages(user_text),
-        tools=tools,
+        messages=messages,
+        max_tokens=MAX_TOKENS,
     )
 
-    return completion_text(response), model
+
+def call_chat(user_text):
+    model = st.session_state.selected_chat_model
+
+    response = call_completion(
+        model,
+        make_messages(user_text),
+    )
+
+    answer = completion_text(response)
+
+    if not answer.strip():
+        answer = (
+            "لم يرجع النموذج إجابة نصية. "
+            "حاول إعادة صياغة السؤال."
+        )
+
+    return answer, model
 
 
-def extract_sources(response_data, answer=""):
+# =====================================================
+# 6. البحث وتشغيل الكود
+# =====================================================
+
+def get_response_text(response):
+    """
+    محاولة قراءة مخرجات Responses API بأكثر من شكل.
+    تختلف بنية الاستجابة بحسب إصدار SDK.
+    """
+    output_text = getattr(response, "output_text", None)
+
+    if isinstance(output_text, str) and output_text.strip():
+        return output_text
+
+    try:
+        data = response.model_dump()
+    except Exception:
+        try:
+            data = dict(response)
+        except Exception:
+            data = {}
+
+    pieces = []
+
+    for item in data.get("output", []) or []:
+        if not isinstance(item, dict):
+            continue
+
+        for content in item.get("content", []) or []:
+            if not isinstance(content, dict):
+                continue
+
+            text_value = content.get("text")
+
+            if isinstance(text_value, str) and text_value.strip():
+                pieces.append(text_value)
+
+    return "\n\n".join(pieces).strip()
+
+
+def collect_urls(value):
     found = []
 
-    def add(url, title=""):
-        if isinstance(url, dict):
-            url = url.get("url") or url.get("uri")
-
-        if not isinstance(url, str):
-            return
-
-        url = url.strip().rstrip(".,;)]}")
-
-        if re.match(r"^https?://", url, re.I):
-            found.append({
-                "title": str(title or url),
-                "url": url,
-            })
-
-    def walk(value):
-        if isinstance(value, dict):
+    def walk(item):
+        if isinstance(item, dict):
             title = (
-                value.get("title")
-                or value.get("name")
-                or value.get("source_title")
+                item.get("title")
+                or item.get("name")
+                or item.get("source_title")
                 or ""
             )
 
             for key in ("url", "uri", "href", "link"):
-                if key in value:
-                    add(value[key], title)
+                link = item.get(key)
 
-            for child in value.values():
+                if isinstance(link, dict):
+                    link = link.get("url") or link.get("uri")
+
+                if (
+                    isinstance(link, str)
+                    and re.match(r"^https?://", link, re.I)
+                ):
+                    found.append({
+                        "title": str(title or link),
+                        "url": link.strip().rstrip(".,;)]}"),
+                    })
+
+            for child in item.values():
                 walk(child)
 
-        elif isinstance(value, list):
-            for child in value:
+        elif isinstance(item, list):
+            for child in item:
                 walk(child)
 
-        elif isinstance(value, str):
-            for url in re.findall(
+        elif isinstance(item, str):
+            for link in re.findall(
                 r"https?://[^\s<>\"']+",
-                value,
+                item,
                 flags=re.I,
             ):
-                add(url)
+                found.append({
+                    "title": link,
+                    "url": link.rstrip(".,;)]}"),
+                })
 
-    walk(response_data)
-    walk(answer)
+    walk(value)
 
     unique = []
     seen = set()
@@ -444,54 +485,111 @@ def extract_sources(response_data, answer=""):
 
 
 def research_with_web(user_text, enable_code=False):
-    if not search_options:
-        raise RuntimeError(
-            "البحث المدمج غير متاح ضمن النماذج التي ظهرت في حسابك."
-        )
+    """
+    يستخدم Responses API وأدوات Groq المدمجة.
+    إذا لم تكن الواجهة أو الأداة مدعومة، يُظهر الخطأ بدل ادعاء نجاح البحث.
+    """
+    model = st.session_state.selected_chat_model
 
-    selected = st.session_state.selected_chat_model
-    model = selected if selected in SEARCH_MODELS else search_options[0]
+    if model not in tool_options:
+        if not tool_options:
+            raise RuntimeError(
+                "لم يظهر نموذج معروف في قائمة التطبيق لأدوات البحث. "
+                "عطّل البحث أو راجع النماذج المدعومة في Groq."
+            )
+        model = tool_options[0]
+
+    if not hasattr(client, "responses"):
+        raise RuntimeError(
+            "إصدار مكتبة Groq الحالي لا يعرض Responses API. "
+            "حدّث groq في requirements.txt ثم أعد نشر التطبيق."
+        )
 
     tools = [{"type": "browser_search"}]
 
-    if enable_code and model in CODE_MODELS:
+    if enable_code:
         tools.append({"type": "code_interpreter"})
 
-    messages = make_messages(user_text)
-    messages[0]["content"] += "\n\n" + RESEARCH_PROMPT
+    # نحول سجل المحادثة إلى إدخال نصي لتقليل اختلاف تنسيقات SDK.
+    history = build_history()
+    conversation = []
 
-    response = call_completion(
-        model=model,
-        messages=messages,
-        tools=tools,
-        tool_choice="required",
+    for item in history:
+        role = item["role"].upper()
+        conversation.append(
+            role + ":\n" + item["content"]
+        )
+
+    conversation.append("USER:\n" + user_text)
+
+    input_text = (
+        SYSTEM_PROMPT
+        + "\n\n"
+        + MODES.get(
+            st.session_state.selected_mode,
+            MODES["متوازن"],
+        )
+        + "\n\n"
+        + RESEARCH_PROMPT
+        + "\n\n"
+        + "\n\n".join(conversation)
     )
 
-    answer = completion_text(response)
+    response = client.responses.create(
+        model=model,
+        input=input_text,
+        tools=tools,
+    )
+
+    answer = get_response_text(response)
 
     try:
         response_data = response.model_dump()
     except Exception:
         response_data = {}
 
-    sources = extract_sources(response_data, answer)
+    sources = collect_urls(response_data)
+    sources.extend(collect_urls(answer))
+
+    unique_sources = []
+    seen = set()
+
+    for source in sources:
+        if source["url"] not in seen:
+            seen.add(source["url"])
+            unique_sources.append(source)
 
     if not answer.strip():
-        answer = "لم يرجع النموذج إجابة نصية. حاول مرة أخرى."
+        answer = "لم ترجع أداة البحث إجابة نصية."
 
-    if not sources:
+    if not unique_sources:
         answer += (
-            "\n\n**تنبيه:** لم أستطع استخراج روابط مباشرة من "
-            "بيانات الاستجابة. لا يعني ذلك أن الإجابة خاطئة، "
-            "لكن التوثيق يحتاج إلى فحص إضافي."
+            "\n\n**تنبيه:** لم أستطع استخراج روابط مباشرة من الاستجابة. "
+            "هذا لا يعني أن الإجابة خاطئة، لكن التوثيق يحتاج إلى فحص إضافي."
+        )
+    else:
+        answer += (
+            "\n\n**تنبيه توثيق:** الروابط المستخرجة ظهرت في الاستجابة، "
+            "لكن التطبيق لا يفتح كل صفحة ويفحص محتواها بشكل مستقل. "
+            "تحقق من أن المصدر يدعم الادعاء قبل الاعتماد عليه."
         )
 
-    return answer, sources, model
+    return answer, unique_sources, model
 
 
-# =========================================================
+def run_code_request(user_text):
+    # تشغيل الكود يعتمد على أداة Groq المدمجة؛ لا ندّعي تنفيذًا محليًا.
+    answer, sources, model = research_with_web(
+        user_text,
+        enable_code=True,
+    )
+
+    return answer, model
+
+
+# =====================================================
 # 7. تحليل الصور
-# =========================================================
+# =====================================================
 
 def image_to_data_url(image_file):
     image_file.seek(0)
@@ -500,28 +598,39 @@ def image_to_data_url(image_file):
     if len(raw) > IMAGE_MAX_BYTES:
         raise ValueError("حجم الصورة يتجاوز 10 ميغابايت.")
 
-    with Image.open(io.BytesIO(raw)) as original:
-        image = original.convert("RGB")
-        image.thumbnail((IMAGE_MAX_SIDE, IMAGE_MAX_SIDE))
+    try:
+        with Image.open(io.BytesIO(raw)) as original:
+            image = original.convert("RGB")
+            image.thumbnail(
+                (IMAGE_MAX_SIDE, IMAGE_MAX_SIDE)
+            )
 
-        buffer = io.BytesIO()
-        image.save(
-            buffer,
-            format="JPEG",
-            quality=82,
-            optimize=True,
-        )
+            buffer = io.BytesIO()
+            image.save(
+                buffer,
+                format="JPEG",
+                quality=82,
+                optimize=True,
+            )
+
+    except (UnidentifiedImageError, OSError) as error:
+        raise ValueError(
+            "تعذر قراءة الصورة. جرّب ملف PNG أو JPG أو WEBP صالحًا."
+        ) from error
 
     encoded = base64.b64encode(
         buffer.getvalue()
-    ).decode("utf-8")
+    ).decode("ascii")
 
     return "data:image/jpeg;base64," + encoded
 
 
 def analyze_image(user_text, image_file):
     if not vision_options:
-        raise RuntimeError("لم يظهر نموذج صور مناسب في قائمة النماذج.")
+        raise RuntimeError(
+            "لم يظهر نموذج صور متاح في قائمة التطبيق. "
+            "راجع النماذج متعددة الوسائط المتاحة في Groq."
+        )
 
     model = vision_options[0]
     image_url = image_to_data_url(image_file)
@@ -531,47 +640,59 @@ def analyze_image(user_text, image_file):
         "وما لا تستطيع التأكد منه."
     )
 
-    messages = make_messages("", include_user=False)
+    messages = make_messages(include_user=False)
 
     messages.append({
         "role": "user",
         "content": [
-            {"type": "text", "text": prompt},
+            {
+                "type": "text",
+                "text": prompt,
+            },
             {
                 "type": "image_url",
-                "image_url": {"url": image_url},
+                "image_url": {
+                    "url": image_url,
+                },
             },
         ],
     })
 
     response = call_completion(model, messages)
-    return completion_text(response), model
+    answer = completion_text(response)
+
+    if not answer.strip():
+        answer = "لم يرجع نموذج الصور إجابة نصية."
+
+    return answer, model
 
 
-# =========================================================
-# 8. مراجعة الإجابة اختياريًا
-# =========================================================
+# =====================================================
+# 8. مراجعة إضافية للإجابة
+# =====================================================
 
 def review_answer(question, answer, model):
-    prompt = """
+    review_prompt = """
 راجع الإجابة بحثًا عن الأخطاء الواقعية والمنطقية والحسابية،
 والتناقضات والمبالغة والادعاءات غير المدعومة.
-صحح الأخطاء الواضحة، وصرّح بما لا تستطيع حسمه.
+صحح الأخطاء الواضحة وصرّح بما لا تستطيع حسمه.
 لا تختلق مصادر أو نتائج بحث.
-لا تعرض سلسلة التفكير الداخلية.
+لا تعتبر المراجعة ضمانًا للصحة.
 أعد الإجابة النهائية المصححة فقط.
 """
 
     messages = [
         {
             "role": "system",
-            "content": SYSTEM_PROMPT + "\n\n" + prompt,
+            "content": SYSTEM_PROMPT + "\n\n" + review_prompt,
         },
         {
             "role": "user",
             "content": (
-                "السؤال:\n" + question
-                + "\n\nالإجابة المراد مراجعتها:\n" + answer
+                "السؤال:\n"
+                + question
+                + "\n\nالإجابة المراد مراجعتها:\n"
+                + answer
             ),
         },
     ]
@@ -582,9 +703,9 @@ def review_answer(question, answer, model):
     return revised.strip() if revised.strip() else answer
 
 
-# =========================================================
-# 9. زر النسخ
-# =========================================================
+# =====================================================
+# 9. زر نسخ الإجابة
+# =====================================================
 
 def render_copy_button(text, button_id):
     safe_text = json.dumps(
@@ -653,9 +774,9 @@ def render_copy_button(text, button_id):
     )
 
 
-# =========================================================
+# =====================================================
 # 10. الشريط الجانبي
-# =========================================================
+# =====================================================
 
 with st.sidebar:
     st.header("⚙️ إعدادات المساعد")
@@ -679,7 +800,7 @@ with st.sidebar:
     if vision_options:
         st.caption("نموذج الصور: " + vision_options[0])
     else:
-        st.warning("لم يظهر نموذج صور مناسب.")
+        st.warning("لم يظهر نموذج صور ضمن قائمة النماذج المحددة.")
 
     st.divider()
     st.subheader("🧰 الأدوات")
@@ -687,31 +808,27 @@ with st.sidebar:
     enable_web_search = st.toggle(
         "🔎 البحث في الإنترنت",
         value=False,
-        disabled=not bool(search_options),
+        help="يتطلب دعم Responses API وأداة البحث في حساب Groq.",
     )
 
     enable_code = st.toggle(
         "🧮 تشغيل الكود والحسابات",
         value=False,
-        disabled=not bool(code_options),
+        help="يعتمد على دعم أداة code_interpreter من Groq.",
     )
 
     enable_review = st.toggle(
         "🛡️ مراجعة إضافية للإجابة",
         value=False,
-        help="قد تزيد استهلاك API، ولا تضمن خلو الإجابة من الأخطاء.",
+        help="تستهلك طلبًا إضافيًا ولا تضمن خلو الإجابة من الأخطاء.",
     )
-
-    # -----------------------------------------------
-    # التحقق المستقل من المرجع - من الملف الخارجي
-    # -----------------------------------------------
 
     st.divider()
     st.subheader("📚 التحقق من مرجع علمي")
 
     st.caption(
-        "أدخل عنوان دراسة أو DOI أو رابط DOI. "
-        "ستُفحص بيانات السجل في Crossref."
+        "يفحص بيانات المرجع في Crossref، "
+        "ولا يثبت أن الدراسة تدعم الادعاء العلمي."
     )
 
     with st.form("reference_verification_form"):
@@ -727,16 +844,16 @@ with st.sidebar:
 
     if verify_submitted:
         try:
-            with st.spinner("جارٍ البحث في سجل Crossref..."):
-                reference_results = verify_reference(reference_query)
+            with st.spinner("جارٍ البحث في Crossref..."):
+                results = verify_reference(reference_query)
 
-            if not reference_results:
+            if not results:
                 st.warning(
-                    "لم تظهر نتائج في Crossref. هذا لا يثبت أن "
-                    "المرجع مختلق؛ قد يكون خارج قاعدة البيانات."
+                    "لم تظهر نتائج في Crossref. "
+                    "هذا لا يثبت أن المرجع مختلق."
                 )
             else:
-                for index, result in enumerate(reference_results):
+                for index, result in enumerate(results):
                     with st.expander(
                         f"النتيجة {index + 1}: {result['title']}",
                         expanded=(index == 0),
@@ -744,10 +861,7 @@ with st.sidebar:
                         display_reference_result(result, st)
 
         except Exception as error:
-            st.error(
-                "تعذر التحقق من المرجع. قد تكون هناك مشكلة "
-                "اتصال أو أن Crossref لم يجد DOI المطلوب."
-            )
+            st.error("تعذر التحقق من المرجع.")
             st.caption(str(error))
 
     st.divider()
@@ -798,11 +912,15 @@ with st.sidebar:
 
                 st.session_state.messages = valid_messages
                 st.session_state.last_sources = []
+                st.session_state.last_model_used = ""
+
                 st.success("تمت استعادة سجل المحادثة.")
                 st.rerun()
 
             except Exception:
-                st.error("تعذرت استعادة الملف. تأكد من سلامة JSON.")
+                st.error(
+                    "تعذرت استعادة الملف. تأكد من سلامة JSON."
+                )
 
     if st.button("مسح المحادثة", use_container_width=True):
         st.session_state.messages = []
@@ -811,9 +929,9 @@ with st.sidebar:
         st.rerun()
 
 
-# =========================================================
+# =====================================================
 # 11. واجهة المساعد
-# =========================================================
+# =====================================================
 
 st.title("🤖 المساعد الذكي الشامل")
 
@@ -856,9 +974,9 @@ if st.session_state.last_model_used:
     )
 
 
-# =========================================================
+# =====================================================
 # 12. إدخال السؤال والصورة
-# =========================================================
+# =====================================================
 
 with st.form("chat_form", clear_on_submit=True):
     user_text = st.text_area(
@@ -879,9 +997,9 @@ with st.form("chat_form", clear_on_submit=True):
     )
 
 
-# =========================================================
+# =====================================================
 # 13. تنفيذ الطلب
-# =========================================================
+# =====================================================
 
 if submitted:
     if not user_text.strip() and uploaded_image is None:
@@ -889,8 +1007,8 @@ if submitted:
 
     else:
         question = user_text.strip()
-
         saved_question = question
+
         if uploaded_image is not None:
             saved_question = (
                 (question + "\n\n") if question else ""
@@ -907,17 +1025,23 @@ if submitted:
                         uploaded_image,
                     )
 
+                elif enable_web_search and enable_code:
+                    answer, sources, model_used = research_with_web(
+                        question,
+                        enable_code=True,
+                    )
+
                 elif enable_web_search:
                     answer, sources, model_used = research_with_web(
                         question,
-                        enable_code=enable_code,
+                        enable_code=False,
                     )
 
+                elif enable_code:
+                    answer, model_used = run_code_request(question)
+
                 else:
-                    answer, model_used = call_chat(
-                        question,
-                        enable_code=enable_code,
-                    )
+                    answer, model_used = call_chat(question)
 
                 if not answer.strip():
                     answer = (
@@ -958,6 +1082,7 @@ if submitted:
                 st.code(str(error))
 
             st.info(
-                "جرّب تعطيل البحث وتشغيل الكود والمراجعة، "
-                "ثم أعد السؤال."
+                "إذا كان الخطأ متعلقًا بالبحث أو تشغيل الكود، "
+                "جرّب تعطيل الأداة مؤقتًا. إذا كان الخطأ من النموذج، "
+                "جرّب اختيار نموذج آخر من القائمة."
             )
